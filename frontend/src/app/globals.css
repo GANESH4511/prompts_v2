@@ -4,39 +4,39 @@
 
 /* 
    Color Palette from user:
-   1. #FAF8FF - Very light lavender (background)
-   2. #E8DDF0 - Light pink/lavender (accent/surface)
-   3. #C4B5F0 - Medium lavender (secondary)
-   4. #A898E8 - Purple/violet (primary)
+   1. #FF9B9B - Coral / Salmon (primary accent)
+   2. #FFD6A5 - Peach / Apricot (secondary surface)
+   3. #FFFEC4 - Cream / Butter (base background warm)
+   4. #CBFFA9 - Mint Green (accent / success)
 */
 
-/* Light Mode (default) - Using provided color palette */
+/* Light Mode (default) - Using provided pastel color palette */
 :root {
-    --background: #FAF8FF;
-    --foreground: #000000;
-    --primary: #A898E8;
-    --primary-hover: #9888D8;
-    --secondary: #C4B5F0;
-    --accent: #E8DDF0;
+    --background: #fffdf4;
+    --foreground: #1a1a1a;
+    --primary: #FF9B9B;
+    --primary-hover: #f07070;
+    --secondary: #FFD6A5;
+    --accent: #FFFEC4;
     --surface: #ffffff;
-    --surface-secondary: #FAF8FF;
-    --border: #C4B5F0;
-    --text-primary: #000000;
-    --text-secondary: #1a1a2e;
-    --text-muted: #3a3a5a;
-    --glass-bg: rgba(255, 255, 255, 0.9);
-    --glass-border: #C4B5F0;
-    --shadow-color: rgba(168, 152, 232, 0.25);
-    --scrollbar-track: #E8DDF0;
-    --scrollbar-thumb: #C4B5F0;
-    --scrollbar-thumb-hover: #A898E8;
-    --glow-color: rgba(168, 152, 232, 0.4);
+    --surface-secondary: #fff9e6;
+    --border: #ffd6a5;
+    --text-primary: #1a1a1a;
+    --text-secondary: #3d2c2c;
+    --text-muted: #7a5c5c;
+    --glass-bg: rgba(255, 255, 255, 0.92);
+    --glass-border: #FFD6A5;
+    --shadow-color: rgba(255, 155, 155, 0.18);
+    --scrollbar-track: #FFFEC4;
+    --scrollbar-thumb: #FFD6A5;
+    --scrollbar-thumb-hover: #FF9B9B;
+    --glow-color: rgba(255, 155, 155, 0.35);
 
     /* Palette colors as direct variables */
-    --palette-1: #FAF8FF;
-    --palette-2: #E8DDF0;
-    --palette-3: #C4B5F0;
-    --palette-4: #A898E8;
+    --palette-1: #FF9B9B;
+    --palette-2: #FFD6A5;
+    --palette-3: #FFFEC4;
+    --palette-4: #CBFFA9;
 }
 
 /* Dark Mode - Inverted palette for dark theme */
@@ -85,7 +85,7 @@ body {
 :root:not(.dark) h6,
 :root:not(.dark) label,
 :root:not(.dark) div:not(.code-editor-wrapper):not(.code-editor-header):not(.code-editor-body):not(.code-display-container):not(.code-edit-container):not(.code-line-numbers-gutter):not(.code-editor-info):not(.code-editor-dots):not(.code-editor-actions):not(.code-loading):not(.code-error):not(.code-empty) {
-    color: #1a1a2e;
+    color: #2d1b1b;
 }
 
 /* Override Tailwind gray/slate text colors in light mode */
@@ -170,17 +170,17 @@ html:not(.dark) code {
 
 /* ===== Light Mode - Palette Colors Applied ===== */
 
-/* Primary buttons use palette purple */
+/* Primary buttons use palette coral */
 html:not(.dark) button[class*="bg-indigo-600"],
 html:not(.dark) button[class*="bg-indigo-500"],
 html:not(.dark) [class*="bg-indigo-600"],
 html:not(.dark) [class*="bg-indigo-500"] {
-    background-color: #A898E8 !important;
+    background-color: #FF9B9B !important;
 }
 
 html:not(.dark) button[class*="bg-indigo-600"]:hover,
 html:not(.dark) button[class*="bg-indigo-500"]:hover {
-    background-color: #9888D8 !important;
+    background-color: #f07070 !important;
 }
 
 /* Input fields in light mode */
@@ -188,38 +188,38 @@ html:not(.dark) input[class*="bg-white/5"],
 html:not(.dark) textarea[class*="bg-white/5"],
 html:not(.dark) input[class*="bg-slate-900"],
 html:not(.dark) textarea[class*="bg-slate-900"] {
-    background-color: #FAF8FF !important;
-    border-color: #C4B5F0 !important;
+    background-color: #fffdf4 !important;
+    border-color: #FFD6A5 !important;
 }
 
 html:not(.dark) input:focus,
 html:not(.dark) textarea:focus {
-    border-color: #A898E8 !important;
-    box-shadow: 0 0 0 2px rgba(168, 152, 232, 0.3) !important;
+    border-color: #FF9B9B !important;
+    box-shadow: 0 0 0 2px rgba(255, 155, 155, 0.25) !important;
 }
 
 /* Dark-background elements in light mode */
 html:not(.dark) [class*="bg-slate-800"],
 html:not(.dark) [class*="bg-slate-900"] {
-    background-color: #E8DDF0 !important;
+    background-color: #FFFEC4 !important;
 }
 
 html:not(.dark) [class*="bg-black/30"],
 html:not(.dark) [class*="bg-black/50"],
 html:not(.dark) [class*="bg-black/70"] {
-    background-color: rgba(232, 221, 240, 0.85) !important;
+    background-color: rgba(255, 254, 196, 0.9) !important;
 }
 
 /* Folder/File list items */
 html:not(.dark) [class*="bg-white/50"],
 html:not(.dark) [class*="bg-slate-900/50"] {
-    background-color: #FAF8FF !important;
-    border-color: #C4B5F0 !important;
+    background-color: #fffdf4 !important;
+    border-color: #FFD6A5 !important;
 }
 
 /* Active/selected ring states */
 html:not(.dark) [class*="ring-indigo-500"] {
-    --tw-ring-color: #A898E8 !important;
+    --tw-ring-color: #FF9B9B !important;
 }
 
 /* Border colors */
@@ -227,35 +227,35 @@ html:not(.dark) [class*="border-white/10"],
 html:not(.dark) [class*="border-white/20"],
 html:not(.dark) [class*="border-slate-600"],
 html:not(.dark) [class*="border-slate-700"] {
-    border-color: #C4B5F0 !important;
+    border-color: #FFD6A5 !important;
 }
 
 /* Icon/element backgrounds */
 html:not(.dark) [class*="bg-white/5"],
 html:not(.dark) [class*="bg-white/10"] {
-    background-color: #E8DDF0 !important;
+    background-color: #FFFEC4 !important;
 }
 
 /* Search and text inputs */
 html:not(.dark) input[type="text"],
 html:not(.dark) input[type="email"],
 html:not(.dark) input[type="password"] {
-    background-color: #FAF8FF !important;
-    border-color: #C4B5F0 !important;
+    background-color: #fffdf4 !important;
+    border-color: #FFD6A5 !important;
 }
 
 /* Gradient text - keep visible */
 html:not(.dark) [class*="bg-gradient-to-r"][class*="bg-clip-text"] {
-    color: #A898E8 !important;
+    color: #d45c5c !important;
     -webkit-background-clip: text !important;
     background-clip: text !important;
 }
 
 /* ===== Login & Register Pages - Glass panel light mode ===== */
 html:not(.dark) .glass-panel {
-    background: rgba(255, 255, 255, 0.92) !important;
-    border-color: #C4B5F0 !important;
-    box-shadow: 0 8px 32px rgba(168, 152, 232, 0.15) !important;
+    background: rgba(255, 255, 255, 0.95) !important;
+    border-color: #FFD6A5 !important;
+    box-shadow: 0 8px 32px rgba(255, 155, 155, 0.15) !important;
 }
 
 /* Login/Register animated background - softer in light mode */
@@ -269,67 +269,67 @@ html:not(.dark) [class*="bg-pink-500/10"] {
 /* Login/Register floating particles in light mode */
 html:not(.dark) [class*="bg-indigo-400/30"],
 html:not(.dark) [class*="bg-purple-400/30"] {
-    background-color: rgba(168, 152, 232, 0.4) !important;
+    background-color: rgba(255, 155, 155, 0.35) !important;
 }
 
 /* Login/Register checkbox in light mode */
 html:not(.dark) input[type="checkbox"] {
-    background-color: #FAF8FF !important;
-    border-color: #C4B5F0 !important;
+    background-color: #fffdf4 !important;
+    border-color: #FFD6A5 !important;
 }
 
 /* Login/Register link colors */
 html:not(.dark) a[class*="text-indigo-400"],
 html:not(.dark) a[class*="text-purple-400"] {
-    color: #A898E8 !important;
+    color: #d45c5c !important;
 }
 
 html:not(.dark) a[class*="text-indigo-400"]:hover,
 html:not(.dark) a[class*="text-purple-400"]:hover {
-    color: #9888D8 !important;
+    color: #f07070 !important;
 }
 
 /* ===== Home Page - Project cards & modals light mode ===== */
 
 /* Project cards in light mode */
 html:not(.dark) .glass-card {
-    background: linear-gradient(145deg, #ffffff 0%, #FAF8FF 100%) !important;
-    border-color: #C4B5F0 !important;
+    background: linear-gradient(145deg, #ffffff 0%, #fffdf4 100%) !important;
+    border-color: #FFD6A5 !important;
 }
 
 /* Active project ring */
 html:not(.dark) [class*="ring-indigo-500"][class*="shadow-lg"] {
-    --tw-ring-color: #A898E8;
-    box-shadow: 0 4px 20px rgba(168, 152, 232, 0.2) !important;
+    --tw-ring-color: #FF9B9B;
+    box-shadow: 0 4px 20px rgba(255, 155, 155, 0.2) !important;
 }
 
 /* Project card icon backgrounds */
 html:not(.dark) [class*="bg-gradient-to-br"][class*="from-indigo-500"] {
-    background: linear-gradient(to bottom right, #A898E8, #C4B5F0) !important;
+    background: linear-gradient(to bottom right, #FF9B9B, #FFD6A5) !important;
 }
 
 html:not(.dark) [class*="bg-gradient-to-br"][class*="from-purple-500"] {
-    background: linear-gradient(to bottom right, #C4B5F0, #E8DDF0) !important;
+    background: linear-gradient(to bottom right, #FFD6A5, #FFFEC4) !important;
 }
 
 /* Dashed border "add new" card */
 html:not(.dark) [class*="border-dashed"][class*="border-white/10"] {
-    border-color: #C4B5F0 !important;
+    border-color: #FFD6A5 !important;
 }
 
 html:not(.dark) [class*="border-dashed"]:hover {
-    border-color: #A898E8 !important;
+    border-color: #FF9B9B !important;
 }
 
 /* Modal overlay in light mode */
 html:not(.dark) [class*="bg-black/70"][class*="backdrop-blur"] {
-    background-color: rgba(250, 248, 255, 0.8) !important;
+    background-color: rgba(255, 253, 244, 0.88) !important;
 }
 
 /* Directory browser in light mode */
 html:not(.dark) [class*="bg-black/30"][class*="rounded-lg"] {
-    background-color: #FAF8FF !important;
-    border-color: #C4B5F0 !important;
+    background-color: #fffdf4 !important;
+    border-color: #FFD6A5 !important;
 }
 
 /* ===== Dashboard Page (page.tsx) - Section color overrides ===== */
@@ -337,58 +337,87 @@ html:not(.dark) [class*="bg-black/30"][class*="rounded-lg"] {
 /* NLP section light tinting */
 html:not(.dark) [class*="bg-emerald-950/20"],
 html:not(.dark) [class*="bg-emerald-950/40"] {
-    background-color: rgba(16, 185, 129, 0.06) !important;
+    background-color: rgba(203, 255, 169, 0.25) !important;
 }
 
 html:not(.dark) [class*="bg-emerald-900/40"],
 html:not(.dark) [class*="bg-emerald-800/20"] {
-    background-color: rgba(16, 185, 129, 0.08) !important;
+    background-color: rgba(203, 255, 169, 0.35) !important;
 }
 
 /* Developer section light tinting */
 html:not(.dark) [class*="bg-purple-950/20"],
 html:not(.dark) [class*="bg-purple-950/40"] {
-    background-color: rgba(168, 85, 247, 0.06) !important;
+    background-color: rgba(255, 155, 155, 0.12) !important;
 }
 
 html:not(.dark) [class*="bg-purple-900/40"],
 html:not(.dark) [class*="bg-purple-800/20"] {
-    background-color: rgba(168, 85, 247, 0.08) !important;
+    background-color: rgba(255, 214, 165, 0.2) !important;
 }
 
 /* Section prompt text in light mode */
 html:not(.dark) [class*="text-emerald-200"] {
-    color: #065f46 !important;
+    color: #2d5016 !important;
 }
 
 html:not(.dark) [class*="text-purple-200"] {
-    color: #581c87 !important;
+    color: #7a1a1a !important;
 }
 
 /* Hover overlays in light mode */
 html:not(.dark) [class*="hover:bg-white/5"]:hover,
 html:not(.dark) [class*="hover:bg-white/10"]:hover {
-    background-color: rgba(168, 152, 232, 0.08) !important;
+    background-color: rgba(255, 214, 165, 0.2) !important;
 }
 
 /* Active badge colors in light mode */
 html:not(.dark) [class*="bg-green-500/20"] {
-    background-color: rgba(16, 185, 129, 0.15) !important;
+    background-color: rgba(203, 255, 169, 0.4) !important;
 }
 
 html:not(.dark) [class*="text-green-400"] {
-    color: #059669 !important;
+    color: #2d7a0f !important;
 }
 
 /* Hover backdrop for cards */
 html:not(.dark) [class*="hover:bg-slate-700"]:hover,
 html:not(.dark) [class*="hover:bg-slate-800"]:hover {
-    background-color: rgba(232, 221, 240, 0.8) !important;
+    background-color: rgba(255, 214, 165, 0.3) !important;
 }
 
 /* Footer text */
 html:not(.dark) [class*="text-gray-600"] {
-    color: #6b6b8a !important;
+    color: #7a4a4a !important;
+}
+
+/* ===== Login/Register Page — Sign In button & logo pastel override ===== */
+/* The button uses 'from-indigo-600 via-purple-600' which Tailwind inlines as a gradient */
+html:not(.dark) button[class*="from-indigo-600"][class*="via-purple-600"],
+html:not(.dark) button[class*="from-indigo-600"] {
+    background-image: linear-gradient(to right, #FF9B9B, #FFD6A5, #FF9B9B) !important;
+    background-color: #FF9B9B !important;
+    color: #fff !important;
+    box-shadow: 0 4px 14px rgba(255, 155, 155, 0.4) !important;
+}
+
+html:not(.dark) button[class*="from-indigo-600"]:hover {
+    box-shadow: 0 4px 20px rgba(255, 155, 155, 0.6) !important;
+    filter: brightness(1.05);
+}
+
+/* Login logo icon — coral-peach gradient */
+html:not(.dark) div[class*="from-indigo-500"][class*="to-purple-600"],
+html:not(.dark) [class*="bg-gradient-to-br"][class*="to-purple-600"] {
+    background-image: linear-gradient(to bottom right, #FF9B9B, #FFD6A5) !important;
+}
+
+/* Login page title gradient text */
+html:not(.dark) [class*="from-indigo-400"][class*="via-purple-400"][class*="to-pink-400"] {
+    background-image: linear-gradient(to right, #FF9B9B, #FFD6A5) !important;
+    -webkit-background-clip: text !important;
+    background-clip: text !important;
+    color: transparent !important;
 }
 
 /* Glassmorphism Utilities */

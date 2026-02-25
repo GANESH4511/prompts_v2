@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { prisma } = require('../lib/prisma');
+const { classifyFiles } = require('../llm/classifier');
 
 const router = express.Router();
 
@@ -33,7 +34,23 @@ const PROJECT_ROOT = findProjectRoot();
 // Directories to skip while scanning
 const SKIP_DIRS = new Set([
     'node_modules', '.next', '.git', 'prompts', 'prompts1',
-    '.dockerignore', 'public', '.vercel', 'dist', 'build', '__pycache__'
+    '.dockerignore', 'public', '.vercel', 'dist', 'build', '__pycache__',
+    'coverage', '.cache', '.turbo', '.swc', '.output'
+]);
+
+// Files to skip (non-modifiable defaults)
+const SKIP_FILES = new Set([
+    'package.json', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
+    'tsconfig.json', 'tsconfig.tsbuildinfo', 'next-env.d.ts',
+    'next.config.ts', 'next.config.js', 'next.config.mjs',
+    'postcss.config.mjs', 'postcss.config.js',
+    'tailwind.config.js', 'tailwind.config.ts',
+    'jsconfig.json', '.eslintrc.js', '.eslintrc.json',
+    '.prettierrc', '.prettierrc.js', 'babel.config.js',
+    'jest.config.js', 'jest.config.ts', 'vite.config.js', 'vite.config.ts',
+    '.gitignore', '.env', '.env.local', '.env.development', '.env.production',
+    'README.md', 'LICENSE', 'Dockerfile', 'docker-compose.yml',
+    'nodemon.json', 'vercel.json', 'fly.toml'
 ]);
 
 // Code file extensions to pick up
@@ -65,6 +82,9 @@ function scanProjectFiles(rootDir) {
                         walk(fullPath);
                     }
                 } else if (entry.isFile()) {
+                    // Skip non-modifiable default files
+                    if (SKIP_FILES.has(entry.name)) continue;
+
                     const ext = path.extname(entry.name).toLowerCase();
                     if (CODE_EXTENSIONS.has(ext)) {
                         codeFiles.push(fullPath);
@@ -376,6 +396,246 @@ function extractTargetFile(content, fullPath, rootDir) {
 }
 
 // ==========================================
+// Core seed logic (reusable by project creation)
+// ==========================================
+async function seedProject(rootDir, projectId) {
+    console.log(`\n🔄 Starting ${projectId ? 'project-scoped' : 'full'} sync...`);
+    console.log(`📁 Root directory: ${rootDir}`);
+    if (projectId) console.log(`🔗 Project ID: ${projectId}`);
+
+    if (!fs.existsSync(rootDir)) {
+        throw new Error(`Root directory not found: ${rootDir}`);
+    }
+
+    // If project-scoped, delete all existing pages and masters for this project first
+    if (projectId) {
+        await prisma.page.deleteMany({ where: { projectId } });
+        await prisma.masterPrompt.deleteMany({ where: { projectId } });
+    }
+
+    // Scan all files in the root directory
+    const { codeFiles, promptFiles } = scanProjectFiles(rootDir);
+
+    console.log(`📂 Found ${codeFiles.length} code files`);
+    console.log(`📝 Found ${promptFiles.length} prompt files`);
+
+    // ==========================================
+    // LLM Classification — classify all files into categories
+    // ==========================================
+    const allFilesForClassification = [];
+    for (const cf of codeFiles) {
+        const relPath = path.relative(rootDir, cf).replace(/\\/g, '/');
+        allFilesForClassification.push({ filePath: relPath, fileName: path.basename(cf) });
+    }
+    for (const pf of promptFiles) {
+        const relPath = path.relative(rootDir, pf).replace(/\\/g, '/');
+        allFilesForClassification.push({ filePath: relPath, fileName: path.basename(pf) });
+    }
+
+    let classifications = {};
+    try {
+        classifications = await classifyFiles(allFilesForClassification);
+    } catch (err) {
+        console.error('  ⚠️ Classification failed, all files default to BACKEND:', err.message);
+    }
+
+    const processed = [];
+    const processedCodePaths = new Set();
+
+    // Helper to get the category for a file
+    const getCategory = (relPath) => {
+        return classifications[relPath] || 'BACKEND';
+    };
+
+    // ==========================================
+    // PHASE 1: Process prompt (.txt) files 
+    // These get full prompt parsing + link to code
+    // ==========================================
+    for (const promptFilePath of promptFiles) {
+        const promptContent = readFileSafe(promptFilePath);
+        if (!promptContent) continue;
+
+        const fileName = path.basename(promptFilePath);
+
+        // Handle MASTER prompts
+        if (fileName.includes('MASTER') || promptContent.includes('MASTER NLP PROMPT')) {
+            const targetFilePathRelative = extractTargetFile(promptContent, promptFilePath, rootDir);
+            const parsedMaster = parseMasterPrompt(promptContent);
+
+            if (projectId) {
+                await prisma.masterPrompt.create({
+                    data: {
+                        pageFilePath: targetFilePathRelative,
+                        projectId,
+                        ...parsedMaster
+                    }
+                });
+            } else {
+                await prisma.masterPrompt.upsert({
+                    where: {
+                        projectId_pageFilePath: {
+                            projectId: null,
+                            pageFilePath: targetFilePathRelative
+                        }
+                    },
+                    update: parsedMaster,
+                    create: {
+                        pageFilePath: targetFilePathRelative,
+                        ...parsedMaster
+                    }
+                });
+            }
+            processed.push({ file: fileName, type: 'master', target: targetFilePathRelative });
+            continue;
+        }
+
+        // Find matching code file for this prompt
+        const matchingCodeFile = findMatchingPromptFile(promptFilePath, codeFiles.map(cf => cf))
+            ? promptFilePath.replace(/\.txt$/, '.js')
+            : deriveCodeFileFromPrompt(promptFilePath, codeFiles);
+
+        const targetFilePathRelative = path.relative(rootDir, matchingCodeFile).replace(/\\/g, '/');
+        const targetFilePathAbsolute = matchingCodeFile.includes(':')
+            ? matchingCodeFile
+            : path.join(rootDir, targetFilePathRelative.split('/').join(path.sep));
+
+        // Parse prompt sections
+        const sections = parsePromptFile(promptContent);
+        if (sections.length === 0) {
+            console.log(`  ⏩ Skipping ${fileName}: No sections found`);
+        }
+
+        const actualTotalLines = countLines(targetFilePathAbsolute);
+        const sourceCode = readFileSafe(targetFilePathAbsolute);
+
+        if (!projectId) {
+            await prisma.page.deleteMany({ where: { filePath: targetFilePathRelative, projectId: null } });
+        }
+
+        const jsFileName = path.basename(targetFilePathRelative);
+        const componentName = jsFileName.replace(/\.(js|jsx|ts|tsx)$/, '');
+        const fileCategory = getCategory(targetFilePathRelative);
+
+        await prisma.page.create({
+            data: {
+                filePath: targetFilePathRelative,
+                componentName: componentName,
+                totalLines: actualTotalLines || 0,
+                purpose: `Prompt file for ${jsFileName}`,
+                category: fileCategory,
+                promptFilePath: promptFilePath,
+                rawContent: promptContent,
+                projectId: projectId || null,
+                sections: {
+                    create: sections.map(s => ({
+                        name: s.name,
+                        startLine: s.startLine,
+                        endLine: s.endLine,
+                        purpose: s.purpose,
+                        prompts: {
+                            create: s.prompts.map(p => ({
+                                template: p.template,
+                                example: p.example,
+                                lineNumber: p.lineNumber,
+                                promptType: p.promptType || 'NLP'
+                            }))
+                        }
+                    }))
+                }
+            }
+        });
+
+        processedCodePaths.add(targetFilePathRelative);
+        processed.push({
+            file: fileName,
+            type: 'page',
+            target: targetFilePathRelative,
+            lines: actualTotalLines,
+            sections: sections.length,
+            hasCode: !!sourceCode,
+            hasPrompt: true,
+            category: fileCategory
+        });
+    }
+
+    // ==========================================
+    // PHASE 2: Process code files WITHOUT prompts
+    // ==========================================
+    for (const codeFilePath of codeFiles) {
+        const relPath = path.relative(rootDir, codeFilePath).replace(/\\/g, '/');
+
+        if (processedCodePaths.has(relPath)) continue;
+
+        const sourceCode = readFileSafe(codeFilePath);
+        if (!sourceCode) continue;
+
+        const totalLines = sourceCode.split(/\r\n|\r|\n/).length;
+        const fileName = path.basename(codeFilePath);
+        const componentName = fileName.replace(/\.(js|jsx|ts|tsx)$/, '');
+        const folderPath = relPath.substring(0, relPath.lastIndexOf('/')) || 'root';
+        const fileCategory = getCategory(relPath);
+
+        if (!projectId) {
+            await prisma.page.deleteMany({ where: { filePath: relPath, projectId: null } });
+        }
+
+        await prisma.page.create({
+            data: {
+                filePath: relPath,
+                componentName: componentName,
+                totalLines: totalLines,
+                purpose: `Source code: ${folderPath}/${fileName}`,
+                category: fileCategory,
+                promptFilePath: null,
+                rawContent: sourceCode,
+                projectId: projectId || null,
+                sections: {
+                    create: []
+                }
+            }
+        });
+
+        processedCodePaths.add(relPath);
+        processed.push({
+            file: fileName,
+            type: 'code',
+            target: relPath,
+            lines: totalLines,
+            sections: 0,
+            hasCode: true,
+            hasPrompt: false,
+            category: fileCategory
+        });
+    }
+
+    // Summary
+    const promptCount = processed.filter(p => p.type === 'page').length;
+    const codeOnlyCount = processed.filter(p => p.type === 'code').length;
+    const masterCount = processed.filter(p => p.type === 'master').length;
+    const catCounts = { FRONTEND: 0, BACKEND: 0, DATABASE: 0 };
+    processed.forEach(p => { if (p.category) catCounts[p.category]++; });
+
+    console.log(`\n✅ Sync complete!`);
+    console.log(`   📝 ${promptCount} files with prompts`);
+    console.log(`   💻 ${codeOnlyCount} code-only files`);
+    console.log(`   🎯 ${masterCount} master prompts`);
+    console.log(`   📊 ${processed.length} total entries`);
+    console.log(`   🎨 Frontend: ${catCounts.FRONTEND} | ⚙️ Backend: ${catCounts.BACKEND} | 🗄️ Database: ${catCounts.DATABASE}\n`);
+
+    return {
+        success: true,
+        processed,
+        summary: {
+            total: processed.length,
+            withPrompts: promptCount,
+            codeOnly: codeOnlyCount,
+            masterPrompts: masterCount,
+            categories: catCounts
+        }
+    };
+}
+
+// ==========================================
 // POST seed database - Sync All Prompts
 // Accepts optional projectId to scope the sync
 // ==========================================
@@ -387,7 +647,6 @@ router.post('/', async (req, res) => {
         let rootDir = PROJECT_ROOT;
 
         if (projectId) {
-            // Look up the project from DB to get its path
             const project = await prisma.project.findUnique({
                 where: { id: projectId }
             });
@@ -397,227 +656,8 @@ router.post('/', async (req, res) => {
             rootDir = project.path.replace(/\//g, path.sep);
         }
 
-        console.log(`\n🔄 Starting ${projectId ? 'project-scoped' : 'full'} sync...`);
-        console.log(`📁 Root directory: ${rootDir}`);
-        if (projectId) console.log(`🔗 Project ID: ${projectId}`);
-
-        if (!fs.existsSync(rootDir)) {
-            return res.status(404).json({ error: `Root directory not found: ${rootDir}` });
-        }
-
-        // If project-scoped, delete all existing pages and masters for this project first
-        if (projectId) {
-            await prisma.page.deleteMany({ where: { projectId } });
-            await prisma.masterPrompt.deleteMany({ where: { projectId } });
-        }
-
-        // Scan all files in the root directory
-        const { codeFiles, promptFiles } = scanProjectFiles(rootDir);
-
-        console.log(`📂 Found ${codeFiles.length} code files`);
-        console.log(`📝 Found ${promptFiles.length} prompt files`);
-
-        const processed = [];
-        const processedCodePaths = new Set(); // Track which code files we've already processed
-
-        // ==========================================
-        // PHASE 1: Process prompt (.txt) files 
-        // These get full prompt parsing + link to code
-        // ==========================================
-        for (const promptFilePath of promptFiles) {
-            const promptContent = readFileSafe(promptFilePath);
-            if (!promptContent) continue;
-
-            const fileName = path.basename(promptFilePath);
-
-            // Handle MASTER prompts
-            if (fileName.includes('MASTER') || promptContent.includes('MASTER NLP PROMPT')) {
-                const targetFilePathRelative = extractTargetFile(promptContent, promptFilePath, rootDir);
-                const parsedMaster = parseMasterPrompt(promptContent);
-
-                if (projectId) {
-                    // Project-scoped: just create (we deleted all at start)
-                    await prisma.masterPrompt.create({
-                        data: {
-                            pageFilePath: targetFilePathRelative,
-                            projectId,
-                            ...parsedMaster
-                        }
-                    });
-                } else {
-                    // Legacy: upsert without projectId
-                    await prisma.masterPrompt.upsert({
-                        where: {
-                            projectId_pageFilePath: {
-                                projectId: null,
-                                pageFilePath: targetFilePathRelative
-                            }
-                        },
-                        update: parsedMaster,
-                        create: {
-                            pageFilePath: targetFilePathRelative,
-                            ...parsedMaster
-                        }
-                    });
-                }
-                processed.push({ file: fileName, type: 'master', target: targetFilePathRelative });
-                continue;
-            }
-
-            // Find matching code file for this prompt
-            const matchingCodeFile = findMatchingPromptFile(promptFilePath, codeFiles.map(cf => cf))
-                ? promptFilePath.replace(/\.txt$/, '.js')
-                : deriveCodeFileFromPrompt(promptFilePath, codeFiles);
-
-            const targetFilePathRelative = path.relative(rootDir, matchingCodeFile).replace(/\\/g, '/');
-            const targetFilePathAbsolute = matchingCodeFile.includes(':')
-                ? matchingCodeFile
-                : path.join(rootDir, targetFilePathRelative.split('/').join(path.sep));
-
-            // Parse prompt sections
-            const sections = parsePromptFile(promptContent);
-            if (sections.length === 0) {
-                console.log(`  ⏩ Skipping ${fileName}: No sections found`);
-            }
-
-            const actualTotalLines = countLines(targetFilePathAbsolute);
-
-            // Read the actual source code
-            const sourceCode = readFileSafe(targetFilePathAbsolute);
-
-            // For non-project-scoped, delete existing entry for this file
-            if (!projectId) {
-                await prisma.page.deleteMany({ where: { filePath: targetFilePathRelative, projectId: null } });
-            }
-
-            const jsFileName = path.basename(targetFilePathRelative);
-            const componentName = jsFileName.replace(/\.(js|jsx|ts|tsx)$/, '');
-
-            // Store both prompt content AND source code
-            await prisma.page.create({
-                data: {
-                    filePath: targetFilePathRelative,
-                    componentName: componentName,
-                    totalLines: actualTotalLines || 0,
-                    purpose: `Prompt file for ${jsFileName}`,
-                    promptFilePath: promptFilePath,
-                    rawContent: promptContent,
-                    projectId: projectId || null,
-                    sections: {
-                        create: sections.map(s => ({
-                            name: s.name,
-                            startLine: s.startLine,
-                            endLine: s.endLine,
-                            purpose: s.purpose,
-                            prompts: {
-                                create: s.prompts.map(p => ({
-                                    template: p.template,
-                                    example: p.example,
-                                    lineNumber: p.lineNumber,
-                                    promptType: p.promptType || 'NLP'
-                                }))
-                            }
-                        }))
-                    }
-                }
-            });
-
-            processedCodePaths.add(targetFilePathRelative);
-            processed.push({
-                file: fileName,
-                type: 'page',
-                target: targetFilePathRelative,
-                lines: actualTotalLines,
-                sections: sections.length,
-                hasCode: !!sourceCode,
-                hasPrompt: true
-            });
-        }
-
-        // ==========================================
-        // PHASE 2: Process code files WITHOUT prompts
-        // These are code-only entries (components, lib, contexts, etc.)
-        // ==========================================
-        for (const codeFilePath of codeFiles) {
-            const relPath = path.relative(rootDir, codeFilePath).replace(/\\/g, '/');
-
-            // Skip if already processed via prompt file
-            if (processedCodePaths.has(relPath)) continue;
-
-            // Skip config files in the root (next.config.js, tailwind.config.js, etc.)
-            const parts = relPath.split('/');
-            if (parts.length === 1) {
-                // Root-level file, skip config files
-                const rootFileName = parts[0].toLowerCase();
-                if (rootFileName.includes('config') || rootFileName.includes('env') || rootFileName === 'jsconfig.json') {
-                    continue;
-                }
-            }
-
-            const sourceCode = readFileSafe(codeFilePath);
-            if (!sourceCode) continue;
-
-            const totalLines = sourceCode.split(/\r\n|\r|\n/).length;
-            const fileName = path.basename(codeFilePath);
-            const componentName = fileName.replace(/\.(js|jsx|ts|tsx)$/, '');
-
-            // Determine folder for grouping
-            const folderPath = relPath.substring(0, relPath.lastIndexOf('/')) || 'root';
-
-            // For non-project-scoped, delete existing entry for refresh
-            if (!projectId) {
-                await prisma.page.deleteMany({ where: { filePath: relPath, projectId: null } });
-            }
-
-            // Create page entry with source code as rawContent
-            await prisma.page.create({
-                data: {
-                    filePath: relPath,
-                    componentName: componentName,
-                    totalLines: totalLines,
-                    purpose: `Source code: ${folderPath}/${fileName}`,
-                    promptFilePath: null,
-                    rawContent: sourceCode,
-                    projectId: projectId || null,
-                    sections: {
-                        create: [] // No prompt sections for code-only files
-                    }
-                }
-            });
-
-            processedCodePaths.add(relPath);
-            processed.push({
-                file: fileName,
-                type: 'code',
-                target: relPath,
-                lines: totalLines,
-                sections: 0,
-                hasCode: true,
-                hasPrompt: false
-            });
-        }
-
-        // Summary
-        const promptCount = processed.filter(p => p.type === 'page').length;
-        const codeOnlyCount = processed.filter(p => p.type === 'code').length;
-        const masterCount = processed.filter(p => p.type === 'master').length;
-
-        console.log(`\n✅ Sync complete!`);
-        console.log(`   📝 ${promptCount} files with prompts`);
-        console.log(`   💻 ${codeOnlyCount} code-only files`);
-        console.log(`   🎯 ${masterCount} master prompts`);
-        console.log(`   📊 ${processed.length} total entries\n`);
-
-        res.json({
-            success: true,
-            processed,
-            summary: {
-                total: processed.length,
-                withPrompts: promptCount,
-                codeOnly: codeOnlyCount,
-                masterPrompts: masterCount
-            }
-        });
+        const result = await seedProject(rootDir, projectId || null);
+        res.json(result);
     } catch (error) {
         console.error('Seed error:', error);
         res.status(500).json({ error: 'Failed to seed database', details: error.message });
@@ -773,3 +813,4 @@ router.get('/check-sync', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.seedProject = seedProject;

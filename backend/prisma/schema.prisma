@@ -7,13 +7,21 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// File category classification
+enum FileCategory {
+  FRONTEND
+  BACKEND
+  DATABASE
+}
+
 // Pages/Files table - stores information about each code file
 model Page {
-  id            String    @id @default(cuid())
+  id            String       @id @default(cuid())
   filePath      String
   componentName String
   totalLines    Int
   purpose       String
+  category      FileCategory @default(BACKEND)
   promptFilePath String?   // Path to the source .txt file
   rawContent    String?   // Store the full original text content
   projectId     String?   // Link to project for multi-project isolation

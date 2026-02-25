@@ -3,6 +3,7 @@ const router = express.Router();
 const { PrismaClient } = require('@prisma/client');
 const path = require('path');
 const fs = require('fs');
+const { seedProject } = require('./seed');
 
 const prisma = new PrismaClient();
 
@@ -84,9 +85,22 @@ router.post('/', async (req, res) => {
             }
         });
 
+        // Auto-sync: scan, classify, and store all project files
+        let syncSummary = null;
+        try {
+            console.log(`\n🚀 Auto-syncing new project: ${name}`);
+            const syncResult = await seedProject(projectPath, project.id);
+            syncSummary = syncResult.summary;
+            console.log(`✅ Auto-sync complete for project: ${name}`);
+        } catch (syncError) {
+            console.error(`⚠️ Auto-sync failed for project ${name}:`, syncError.message);
+            // Don't fail the project creation, just warn
+        }
+
         res.json({
             success: true,
-            project
+            project,
+            syncSummary
         });
     } catch (error) {
         console.error('Error creating project:', error);

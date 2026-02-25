@@ -7,7 +7,7 @@ export default function RootPage() {
     const router = useRouter()
 
     useEffect(() => {
-        router.replace('/nlp-dashboard')
+        router.replace('/new-dashboard')
     }, [router])
 
     return (

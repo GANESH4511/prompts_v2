@@ -417,7 +417,7 @@ export default function PromptDetailPage() {
             console.log('Seed result:', seedResult)
 
             alert('Saved successfully!')
-            router.push('/nlp-dashboard')
+            router.push('/new-dashboard')
         } catch (e) {
             console.error('Save error:', e)
             alert('Failed to save changes: ' + (e instanceof Error ? e.message : String(e)))
@@ -443,7 +443,7 @@ export default function PromptDetailPage() {
                     <div className="prompt-error-icon">⚠️</div>
                     <h2 className="prompt-error-title">{error || 'Page not found'}</h2>
                     <p className="prompt-error-text">The prompt file could not be loaded.</p>
-                    <button onClick={() => router.push('/nlp-dashboard')} className="prompt-error-btn">
+                    <button onClick={() => router.push('/new-dashboard')} className="prompt-error-btn">
                         ← Back to Dashboard
                     </button>
                 </div>
@@ -625,7 +625,7 @@ export default function PromptDetailPage() {
                     <div className="topbar-left">
                         {/* Back button — hidden in embedded mode */}
                         {!isEmbedded && (
-                            <button onClick={() => router.push('/nlp-dashboard')} className="topbar-back-btn" title="Back to Dashboard">
+                            <button onClick={() => router.push('/new-dashboard')} className="topbar-back-btn" title="Back to Dashboard">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                                     <path d="M15 19l-7-7 7-7" strokeLinecap="round" strokeLinejoin="round" />
                                 </svg>

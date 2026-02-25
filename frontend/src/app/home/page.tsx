@@ -201,7 +201,7 @@ export default function HomePage() {
                 setSelectedPath('');
                 await fetchProjects();
                 // Navigate to the main app
-                router.push('/nlp-dashboard');
+                router.push('/new-dashboard');
             } else {
                 setError(result.error || result.data?.message || 'Failed to create project');
             }
@@ -225,7 +225,7 @@ export default function HomePage() {
             if (result.success && result.data?.success) {
                 await fetchProjects();
                 // Navigate to the main app
-                router.push('/nlp-dashboard');
+                router.push('/new-dashboard');
             }
         } catch (err) {
             console.error('Error activating project:', err);
