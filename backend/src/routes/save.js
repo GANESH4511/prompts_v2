@@ -5,41 +5,99 @@ const { prisma } = require('../lib/prisma');
 
 const router = express.Router();
 
-// POST save prompt content
+/**
+ * POST /api/save
+ * 
+ * Save edited prompt content to the source .txt file and update the database.
+ * 
+ * Flow:
+ * 1. Find the page record in the database by pageId
+ * 2. Determine the prompt file path (from DB or derive from filePath)
+ * 3. Delete the old prompt file if it exists
+ * 4. Write the new content to the prompt file
+ * 5. Update rawContent in the database
+ */
 router.post('/', async (req, res) => {
     try {
-        const { pageId, content } = req.body;
+        const { pageId, content, projectId } = req.body;
 
         if (!pageId || content === undefined) {
-            return res.status(400).json({ error: 'Missing pageId or content' });
+            return res.status(400).json({ success: false, error: 'Missing pageId or content' });
         }
 
+        // Find the page with its file path info
         const page = await prisma.page.findUnique({
             where: { id: pageId },
-            select: { promptFilePath: true }
+            select: { promptFilePath: true, filePath: true, projectId: true }
         });
 
         if (!page) {
-            return res.status(404).json({ error: 'Page not found' });
+            return res.status(404).json({ success: false, error: 'Page not found' });
         }
 
-        if (!page.promptFilePath) {
-            return res.status(400).json({ error: 'No prompt file path linked' });
+        let targetFilePath = page.promptFilePath;
+
+        // If no promptFilePath is linked, derive it from the source file path
+        if (!targetFilePath && page.filePath) {
+            // Determine project root to resolve relative filePath
+            let rootDir = null;
+            const pid = projectId || page.projectId;
+            if (pid) {
+                const project = await prisma.project.findUnique({ where: { id: pid } });
+                if (project) {
+                    rootDir = project.path.replace(/\//g, path.sep);
+                }
+            }
+            if (!rootDir) {
+                rootDir = process.env.PROJECT_ROOT || 'C:\\SNIX\\sify\\HrAssist\\exam';
+            }
+
+            // Derive .txt path from the source code path
+            const absoluteSourcePath = path.join(rootDir, page.filePath.split('/').join(path.sep));
+            const sourceDir = path.dirname(absoluteSourcePath);
+            const baseName = path.basename(absoluteSourcePath, path.extname(absoluteSourcePath));
+            targetFilePath = path.join(sourceDir, `${baseName}.txt`);
         }
 
-        // Write to file
-        fs.writeFileSync(page.promptFilePath, content, 'utf-8');
+        if (!targetFilePath) {
+            return res.status(400).json({ success: false, error: 'Cannot determine prompt file path for this page' });
+        }
 
-        // Update rawContent in DB
+        console.log(`\n💾 Save Prompt`);
+        console.log(`  📄 Page ID: ${pageId}`);
+        console.log(`  📂 Target: ${targetFilePath}`);
+        console.log(`  📊 Content: ${content.length} chars`);
+
+        // Ensure the directory exists
+        const dir = path.dirname(targetFilePath);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+
+        // Delete old file if it exists (clean slate)
+        if (fs.existsSync(targetFilePath)) {
+            fs.unlinkSync(targetFilePath);
+            console.log(`  🗑️  Deleted old file`);
+        }
+
+        // Write new content to the prompt file
+        fs.writeFileSync(targetFilePath, content, 'utf-8');
+        console.log(`  ✅ Written new content to file`);
+
+        // Update rawContent and promptFilePath in DB
         await prisma.page.update({
             where: { id: pageId },
-            data: { rawContent: content }
+            data: {
+                rawContent: content,
+                promptFilePath: targetFilePath
+            }
         });
+        console.log(`  ✅ Database updated`);
 
-        res.json({ success: true });
+        res.json({ success: true, promptFilePath: targetFilePath });
     } catch (error) {
         console.error('Save error:', error);
-        res.status(500).json({ error: 'Failed to save prompt' });
+        res.status(500).json({ success: false, error: 'Failed to save prompt: ' + error.message });
     }
 });
 

@@ -1,0 +1,31 @@
+
+# Frontend Testing Builder Skill
+
+## Purpose
+Designs and builds frontend tests that validate real user behavior.
+
+## Build process
+
+1. **Identify critical user flows**  
+   Test what users actually do, not implementation details.
+
+2. **Choose the right test level**  
+   Use unit tests for logic, integration for components, E2E for flows.
+
+3. **Behavior-first assertions**  
+   Assert outcomes visible to the user, not internal state.
+
+4. **Deterministic setup**  
+   Mock only what is unstable. Control time, network, and data.
+
+5. **Failure clarity**  
+   Tests should fail with obvious, actionable reasons.
+
+6. **Maintenance discipline**  
+   Prefer fewer high-value tests over broad shallow coverage.
+
+## Failure rules
+
+- Do not test implementation details  
+- Do not rely on brittle snapshots  
+- Do not write tests that give false confidence

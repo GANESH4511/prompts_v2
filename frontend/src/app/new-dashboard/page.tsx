@@ -288,7 +288,7 @@ export default function NewDashboard() {
         finally { setLoading(false) }
     }
 
-    const loadPages = async (projectId: string) => {
+    const loadPages = async (projectId: string): Promise<Page[]> => {
         try {
             const res = await apiRequest(`/api/pages?projectId=${projectId}`)
             if (res.success && res.data?.pages) {
@@ -302,8 +302,10 @@ export default function NewDashboard() {
                     tree.forEach(g => allGroupKeys.add(`${cat}:${g.label}`))
                 }
                 setExpandedGroups(allGroupKeys)
+                return loaded
             }
         } catch (err) { console.error('Failed to load pages:', err) }
+        return []
     }
 
     // --- Sync ---
@@ -321,7 +323,12 @@ export default function NewDashboard() {
             if (data.success) {
                 const s = data.summary
                 setSyncMessage(`Synced ${s.total} files — Frontend: ${s.categories?.FRONTEND || 0} | Backend: ${s.categories?.BACKEND || 0} | Database: ${s.categories?.DATABASE || 0}`)
-                await loadPages(project.id)
+                const freshPages = await loadPages(project.id)
+                // Refresh selectedPage if one is active
+                if (selectedPage) {
+                    const refreshed = freshPages.find((p: Page) => p.filePath === selectedPage.filePath)
+                    if (refreshed) { setSelectedPage(refreshed); setEditContent(refreshed.rawContent || '') }
+                }
             } else {
                 setSyncMessage(`Sync failed: ${data.error}`)
             }
@@ -362,11 +369,34 @@ export default function NewDashboard() {
 
     // --- Save ---
     const handleSave = async () => {
-        if (!selectedPage) return
+        if (!selectedPage || syncing) return
+        setSyncing(true)
+        setSyncMessage('Saving prompt to source file...')
         try {
-            const res = await apiRequest(`/api/save`, { method: 'POST', body: { pageId: selectedPage.id, content: editContent, projectId: project?.id } })
-            if (res.success) { setSyncMessage('Saved successfully!'); setTimeout(() => setSyncMessage(''), 3000); setEditMode(false); if (project) await loadPages(project.id) }
-        } catch { setSyncMessage('Save failed') }
+            const res = await apiRequest(`/api/save`, {
+                method: 'POST',
+                body: { pageId: selectedPage.id, content: editContent, projectId: project?.id }
+            })
+            if (res.success) {
+                setSyncMessage('✅ Saved successfully to source file!')
+                setTimeout(() => setSyncMessage(''), 4000)
+                setEditMode(false)
+                // Refresh pages so the UI shows the saved content
+                if (project) {
+                    const freshPages = await loadPages(project.id)
+                    const refreshed = freshPages.find((p: Page) => p.filePath === selectedPage.filePath)
+                    if (refreshed) { setSelectedPage(refreshed); setEditContent(refreshed.rawContent || '') }
+                }
+            } else {
+                setSyncMessage(`❌ Save failed: ${res.error || 'Unknown error'}`)
+                setTimeout(() => setSyncMessage(''), 6000)
+            }
+        } catch {
+            setSyncMessage('❌ Save failed: Network error')
+            setTimeout(() => setSyncMessage(''), 6000)
+        } finally {
+            setSyncing(false)
+        }
     }
 
     const handleLogout = () => { clearAuthData(); router.push('/login') }
@@ -783,7 +813,7 @@ export default function NewDashboard() {
                                 <span style={{ fontSize: 11, color: colors.textSecondary }}>{selectedPage.totalLines} lines</span>
                             </div>
 
-                            {/* ===== NLP PROMPT FILTER TOGGLE BAR ===== */}
+                            {/* ===== FILTER TOGGLE BAR ===== */}
                             <div style={{ flexShrink: 0, borderBottom: `1px solid ${colors.border}`, background: isDark ? '#111827' : '#f9fafb', padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
                                 <span style={{ fontSize: 11, fontWeight: 600, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em', marginRight: 4 }}>Filter:</span>
                                 {(['FRONTEND', 'BACKEND', 'DATABASE'] as CategoryKey[]).map(cat => {
@@ -818,154 +848,192 @@ export default function NewDashboard() {
                                         ✕ Clear
                                     </button>
                                 )}
+                                <div style={{ flex: 1 }} />
+                                {/* Re-generate Button */}
+                                <button
+                                    onClick={async () => {
+                                        if (!selectedPage || syncing) return
+                                        const currentFilePath = selectedPage.filePath
+                                        setSyncing(true)
+                                        setSyncMessage('Generating prompts from template...')
+                                        // Clear old prompt immediately so stale content is gone
+                                        setSelectedPage(prev => prev ? { ...prev, rawContent: null, sections: [] } : prev)
+                                        setEditContent('')
+                                        setEditMode(false)
+                                        setPromptFilter(null)
+                                        try {
+                                            const res = await fetch(`${API_URL}/api/generate-prompts`, {
+                                                method: 'POST',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({ projectId: project?.id, filePath: currentFilePath })
+                                            })
+                                            const data = await res.json()
+                                            if (data.success) {
+                                                setSyncMessage(`Prompts re-generated successfully! (${data.elapsed})`)
+                                                // Directly fetch fresh pages and find the regenerated one
+                                                if (project) {
+                                                    const freshPages = await loadPages(project.id)
+                                                    const regeneratedPage = freshPages.find((p: Page) => p.filePath === currentFilePath)
+                                                    if (regeneratedPage) {
+                                                        setSelectedPage(regeneratedPage)
+                                                        setEditContent(regeneratedPage.rawContent || '')
+                                                    }
+                                                }
+                                            } else {
+                                                setSyncMessage(`Re-generate failed: ${data.error}`)
+                                            }
+                                        } catch { setSyncMessage('Re-generate failed: Network error') }
+                                        finally { setSyncing(false); setTimeout(() => setSyncMessage(''), 8000) }
+                                    }}
+                                    disabled={syncing}
+                                    style={{
+                                        display: 'flex', alignItems: 'center', gap: 6,
+                                        padding: '5px 14px', borderRadius: 20, fontSize: 12, fontWeight: 600,
+                                        cursor: syncing ? 'wait' : 'pointer',
+                                        border: `1.5px solid ${isDark ? '#6366f1' : '#4f46e5'}`,
+                                        background: isDark ? '#312e81' : '#eef2ff',
+                                        color: isDark ? '#a5b4fc' : '#4338ca',
+                                        transition: 'all 0.15s ease',
+                                        outline: 'none',
+                                    }}
+                                >
+                                    <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={syncing ? { animation: 'spin 1s linear infinite' } : {}}>
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                                    </svg>
+                                    {syncing ? 'Generating...' : 'Re-generate'}
+                                </button>
                             </div>
 
                             {/* Content */}
                             <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
                                 {(() => {
-                                    // Collect all NLP prompts from all sections, optionally filtered
-                                    const allNlpPrompts: Array<{ prompt: typeof selectedPage.sections[0]['prompts'][0], sectionName: string }> = []
-                                    for (const section of selectedPage.sections) {
-                                        for (const prompt of section.prompts) {
-                                            if (prompt.promptType === 'NLP') {
-                                                allNlpPrompts.push({ prompt, sectionName: section.name })
+                                    // Get the full prompt text
+                                    const fullContent = editMode ? editContent : (selectedPage.rawContent || '')
+
+                                    // Apply focused filter: extract content between ### Category markers
+                                    const applyFocusedFilter = (content: string, filter: CategoryKey): string => {
+                                        if (!content) return ''
+                                        const contentLines = content.split('\n')
+                                        const filteredLines: string[] = []
+                                        let insideMatchingBlock = false
+
+                                        for (const line of contentLines) {
+                                            const lowerLine = line.trim().toLowerCase()
+                                            const isH3Heading = lowerLine.startsWith('### ') && !lowerLine.startsWith('#### ')
+
+                                            if (isH3Heading) {
+                                                if (lowerLine.startsWith('### frontend')) {
+                                                    insideMatchingBlock = filter === 'FRONTEND'
+                                                } else if (lowerLine.startsWith('### backend')) {
+                                                    insideMatchingBlock = filter === 'BACKEND'
+                                                } else if (lowerLine.startsWith('### database')) {
+                                                    insideMatchingBlock = filter === 'DATABASE'
+                                                } else {
+                                                    insideMatchingBlock = false
+                                                }
+                                            }
+
+                                            if (lowerLine.startsWith('===') && insideMatchingBlock && filteredLines.length > 0) {
+                                                insideMatchingBlock = false
+                                            }
+
+                                            if (insideMatchingBlock) {
+                                                filteredLines.push(line)
                                             }
                                         }
+
+                                        return filteredLines.join('\n')
                                     }
 
-                                    // Filter prompts by promptFilter (match against page category or section name)
-                                    const filteredPrompts = promptFilter
-                                        ? allNlpPrompts.filter(({ sectionName }) => {
-                                            const n = sectionName.toUpperCase()
-                                            return n.includes(promptFilter) || selectedPage.category === promptFilter
-                                        })
-                                        : allNlpPrompts
+                                    const displayContent = promptFilter
+                                        ? applyFocusedFilter(fullContent, promptFilter)
+                                        : fullContent
 
                                     return (
                                         <>
-                                            {/* Page Summary */}
-                                            {selectedPage.purpose && (
-                                                <div style={{
-                                                    marginBottom: 20,
-                                                    padding: '14px 18px',
-                                                    borderRadius: 10,
-                                                    background: isDark ? '#1e293b' : '#f0fdf4',
-                                                    border: `1px solid ${isDark ? '#334155' : '#bbf7d0'}`,
-                                                    borderLeft: `4px solid #22c55e`,
-                                                }}>
-                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                                                        <span style={{ fontSize: 10, fontWeight: 700, color: '#16a34a', textTransform: 'uppercase', letterSpacing: '0.07em' }}>📋 Page Summary</span>
-                                                    </div>
-                                                    <p style={{ fontSize: 13, color: colors.textPrimary, lineHeight: 1.7, margin: 0, fontWeight: 400 }}>
-                                                        {selectedPage.purpose}
-                                                    </p>
-                                                </div>
-                                            )}
-
-                                            {/* NLP Prompts */}
-                                            {filteredPrompts.length > 0 ? (
+                                            {displayContent ? (
                                                 <div>
+                                                    {/* Action bar */}
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-                                                        <span style={{ fontSize: 11, fontWeight: 700, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em' }}>NLP Prompts</span>
-                                                        <span style={{ fontSize: 10, padding: '1px 8px', borderRadius: 10, background: isDark ? '#1e3a5f' : '#dbeafe', color: isDark ? '#93c5fd' : '#1d4ed8', fontWeight: 600 }}>{filteredPrompts.length}</span>
+                                                        {promptFilter && (
+                                                            <span style={{ fontSize: 11, fontWeight: 600, color: CATEGORIES[promptFilter].headerText, background: CATEGORIES[promptFilter].headerBg, padding: '2px 10px', borderRadius: 10 }}>
+                                                                {CATEGORIES[promptFilter].icon} {CATEGORIES[promptFilter].label} Prompts
+                                                            </span>
+                                                        )}
+                                                        <div style={{ flex: 1 }} />
+                                                        {editMode ? (
+                                                            <>
+                                                                <button
+                                                                    onClick={handleSave}
+                                                                    disabled={syncing}
+                                                                    style={{ padding: '5px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: syncing ? 'wait' : 'pointer', background: '#15803d', color: '#d1fae5', border: '1px solid #166534', outline: 'none', display: 'flex', alignItems: 'center', gap: 4, opacity: syncing ? 0.6 : 1 }}
+                                                                >
+                                                                    {syncing ? '⏳ Saving...' : '✓ Save'}
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => { setEditMode(false); setEditContent(selectedPage.rawContent || '') }}
+                                                                    style={{ padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 500, cursor: 'pointer', background: 'transparent', color: colors.textMuted, border: `1px solid ${colors.borderStrong}`, outline: 'none' }}
+                                                                >
+                                                                    Cancel
+                                                                </button>
+                                                            </>
+                                                        ) : (
+                                                            <button
+                                                                onClick={() => { setEditMode(true); setEditContent(selectedPage.rawContent || ''); setPromptFilter(null) }}
+                                                                style={{ padding: '5px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', background: isDark ? '#1e293b' : '#f1f5f9', color: colors.textPrimary, border: `1px solid ${colors.borderStrong}`, outline: 'none', display: 'flex', alignItems: 'center', gap: 4 }}
+                                                            >
+                                                                ✏️ Edit Prompt
+                                                            </button>
+                                                        )}
                                                     </div>
-                                                    {filteredPrompts.map(({ prompt, sectionName }) => (
-                                                        <div key={prompt.id} style={{
-                                                            marginBottom: 14,
-                                                            borderRadius: 10,
-                                                            border: `1px solid ${editingPromptId === prompt.id ? '#6366f1' : colors.borderStrong}`,
-                                                            background: editingPromptId === prompt.id
-                                                                ? (isDark ? '#1e1b4b' : '#eef2ff')
-                                                                : (isDark ? '#1e293b' : '#ffffff'),
-                                                            overflow: 'hidden',
-                                                            boxShadow: editingPromptId === prompt.id ? '0 0 0 2px rgba(99,102,241,0.25)' : (isDark ? 'none' : '0 1px 3px rgba(0,0,0,0.04)'),
-                                                            transition: 'all 0.15s ease',
+
+                                                    {/* Content display */}
+                                                    {editMode ? (
+                                                        <textarea
+                                                            ref={editorRef}
+                                                            autoFocus
+                                                            value={editContent}
+                                                            onChange={e => setEditContent(e.target.value)}
+                                                            spellCheck={false}
+                                                            style={{
+                                                                width: '100%',
+                                                                minHeight: 'calc(100vh - 260px)',
+                                                                background: isDark ? '#0f172a' : '#fafafa',
+                                                                color: colors.textPrimary,
+                                                                fontFamily: '"Cascadia Code", "Fira Code", monospace',
+                                                                fontSize: 13,
+                                                                padding: 16,
+                                                                borderRadius: 8,
+                                                                border: `1px solid ${isDark ? '#6366f1' : '#c7d2fe'}`,
+                                                                outline: 'none',
+                                                                resize: 'vertical',
+                                                                lineHeight: 1.7,
+                                                                boxSizing: 'border-box',
+                                                            }}
+                                                        />
+                                                    ) : (
+                                                        <pre style={{
+                                                            fontSize: 13,
+                                                            color: colors.textPrimary,
+                                                            whiteSpace: 'pre-wrap',
+                                                            wordBreak: 'break-word',
+                                                            fontFamily: '"Cascadia Code", "Fira Code", monospace',
+                                                            lineHeight: 1.7,
+                                                            margin: 0,
+                                                            padding: 0,
                                                         }}>
-                                                            {/* Prompt header */}
-                                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', background: isDark ? 'rgba(255,255,255,0.03)' : '#f8fafc', borderBottom: `1px solid ${colors.border}` }}>
-                                                                <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 10, fontWeight: 700, letterSpacing: '0.04em', background: '#1e3a5f', color: '#93c5fd' }}>NLP</span>
-                                                                <span style={{ fontSize: 11, color: colors.textMuted }}>Line {prompt.lineNumber}</span>
-                                                                <span style={{ fontSize: 10, color: colors.textFaint, borderRadius: 6, padding: '1px 6px', background: isDark ? '#334155' : '#f1f5f9' }}>{sectionName}</span>
-                                                                <div style={{ flex: 1 }} />
-                                                                {editingPromptId === prompt.id ? (
-                                                                    <>
-                                                                        <button
-                                                                            onClick={async () => {
-                                                                                // Save edited prompt via API
-                                                                                try {
-                                                                                    const res = await apiRequest('/api/save', { method: 'POST', body: { pageId: selectedPage.id, content: editedPromptContent, promptId: prompt.id, projectId: project?.id } })
-                                                                                    if (res.success) { setSyncMessage('Prompt saved!'); setTimeout(() => setSyncMessage(''), 3000); setEditingPromptId(null); if (project) await loadPages(project.id) }
-                                                                                    else { setSyncMessage('Save failed') }
-                                                                                } catch { setSyncMessage('Save failed') }
-                                                                            }}
-                                                                            style={{ padding: '3px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', background: '#15803d', color: '#d1fae5', border: '1px solid #166534', outline: 'none' }}
-                                                                        >
-                                                                            ✓ Save
-                                                                        </button>
-                                                                        <button
-                                                                            onClick={() => setEditingPromptId(null)}
-                                                                            style={{ padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 500, cursor: 'pointer', background: 'transparent', color: colors.textMuted, border: `1px solid ${colors.borderStrong}`, outline: 'none' }}
-                                                                        >
-                                                                            Cancel
-                                                                        </button>
-                                                                    </>
-                                                                ) : (
-                                                                    <button
-                                                                        onClick={() => { setEditingPromptId(prompt.id); setEditedPromptContent(prompt.template) }}
-                                                                        style={{ padding: '3px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', background: isDark ? '#1e293b' : '#f1f5f9', color: colors.textPrimary, border: `1px solid ${colors.borderStrong}`, outline: 'none', display: 'flex', alignItems: 'center', gap: 4 }}
-                                                                    >
-                                                                        ✏️ Edit
-                                                                    </button>
-                                                                )}
-                                                            </div>
-                                                            {/* Prompt body */}
-                                                            <div style={{ padding: '12px 14px' }}>
-                                                                {editingPromptId === prompt.id ? (
-                                                                    <textarea
-                                                                        autoFocus
-                                                                        value={editedPromptContent}
-                                                                        onChange={e => setEditedPromptContent(e.target.value)}
-                                                                        spellCheck={false}
-                                                                        style={{
-                                                                            width: '100%',
-                                                                            minHeight: 120,
-                                                                            background: isDark ? '#0f172a' : '#f8fafc',
-                                                                            color: colors.textPrimary,
-                                                                            fontFamily: '"Cascadia Code", "Fira Code", monospace',
-                                                                            fontSize: 13,
-                                                                            padding: 12,
-                                                                            borderRadius: 6,
-                                                                            border: `1px solid #6366f1`,
-                                                                            outline: 'none',
-                                                                            resize: 'vertical',
-                                                                            lineHeight: 1.7,
-                                                                            boxSizing: 'border-box',
-                                                                        }}
-                                                                    />
-                                                                ) : (
-                                                                    <pre style={{
-                                                                        fontSize: 13,
-                                                                        color: colors.textPrimary,
-                                                                        whiteSpace: 'pre-wrap',
-                                                                        fontFamily: '"Cascadia Code", "Fira Code", monospace',
-                                                                        lineHeight: 1.7,
-                                                                        margin: 0,
-                                                                    }}>
-                                                                        {prompt.template}
-                                                                    </pre>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                    ))}
+                                                            {displayContent}
+                                                        </pre>
+                                                    )}
                                                 </div>
                                             ) : (
                                                 <div style={{ textAlign: 'center', padding: '40px 20px', color: colors.textMuted }}>
-                                                    <div style={{ fontSize: 32, marginBottom: 10 }}>💬</div>
+                                                    <div style={{ fontSize: 32, marginBottom: 10 }}>📄</div>
                                                     <p style={{ fontSize: 13, fontWeight: 500 }}>
-                                                        {promptFilter ? `No NLP prompts matching "${CATEGORIES[promptFilter].label}" for this file.` : 'No NLP prompts found for this file.'}
+                                                        {promptFilter ? `No "${CATEGORIES[promptFilter].label}" content found in this prompt file.` : 'No prompt content found for this file.'}
                                                     </p>
                                                     {promptFilter && (
-                                                        <button onClick={() => setPromptFilter(null)} style={{ marginTop: 8, fontSize: 12, color: '#6366f1', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>Show all prompts</button>
+                                                        <button onClick={() => setPromptFilter(null)} style={{ marginTop: 8, fontSize: 12, color: '#6366f1', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>Show full prompt</button>
                                                     )}
                                                 </div>
                                             )}

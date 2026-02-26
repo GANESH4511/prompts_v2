@@ -12,9 +12,10 @@
  * 4. Call generatePrompt() for NLP template
  * 5. Call generatePrompt() for Developer template
  * 6. Combine into single .txt using existing delimiters
- * 7. Write file atomically next to source file
- * 8. Trigger /api/seed
- * 9. Respond only after seed completes
+ * 7. DELETE old prompt .txt file from source directory
+ * 8. Write new prompt .txt file atomically next to source file
+ * 9. Trigger /api/seed to sync database
+ * 10. Respond only after seed completes
  */
 
 const express = require('express');
@@ -87,15 +88,16 @@ function buildPromptFileContent({ fileName, nlpOutput, devOutput, nlpVersion, de
  * Trigger the existing /api/seed pipeline internally.
  * Makes an HTTP call to the seed endpoint.
  */
-async function triggerSeed() {
+async function triggerSeed(projectId) {
     const port = process.env.PORT || 5000;
     const seedUrl = `http://localhost:${port}/api/seed`;
 
-    console.log('  🔄 Triggering seed...');
+    console.log(`  🔄 Triggering seed for project: ${projectId || 'default'}...`);
 
     const response = await fetch(seedUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId })
     });
 
     if (!response.ok) {
@@ -205,25 +207,35 @@ router.post('/', async (req, res) => {
             devVersion
         });
 
-        // --- Step 7: Atomic file write next to source file ---
+        // --- Step 7: Delete old prompt file first ---
         const sourceDir = path.dirname(absoluteSourcePath);
         const baseName = path.basename(absoluteSourcePath, path.extname(absoluteSourcePath));
         const promptFilePath = path.join(sourceDir, `${baseName}.txt`);
         const tmpFilePath = promptFilePath + '.tmp';
 
-        // Write to temp file first (atomic)
+        // Remove old prompt file if it exists
+        if (fs.existsSync(promptFilePath)) {
+            fs.unlinkSync(promptFilePath);
+            console.log(`  🗑️  Deleted old prompt: ${promptFilePath}`);
+        }
+        // Also clean up any stale .tmp file
+        if (fs.existsSync(tmpFilePath)) {
+            fs.unlinkSync(tmpFilePath);
+        }
+
+        // --- Step 8: Write new prompt file ---
+        // Write to temp file first, then rename (atomic)
         fs.writeFileSync(tmpFilePath, promptContent, 'utf-8');
-        // Rename to final destination (atomic on same filesystem)
         fs.renameSync(tmpFilePath, promptFilePath);
 
         const outputHash = crypto.createHash('sha256').update(promptContent).digest('hex').substring(0, 12);
         console.log(`  💾 Written: ${promptFilePath}`);
         console.log(`  📊 Output: ${promptContent.length} chars, hash=${outputHash}`);
 
-        // --- Step 8: Trigger existing /api/seed ---
-        const seedResult = await triggerSeed();
+        // --- Step 9: Trigger existing /api/seed to sync database ---
+        const seedResult = await triggerSeed(projectId);
 
-        // --- Step 9: Respond ---
+        // --- Step 10: Respond ---
         const elapsed = Date.now() - startTime;
         console.log(`  ⏱️  Total: ${elapsed}ms\n`);
 
