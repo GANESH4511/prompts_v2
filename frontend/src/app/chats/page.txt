@@ -1,0 +1,363 @@
+================================================================================
+              GENERATED PROMPT (page.tsx)
+================================================================================
+Generated: 2026-02-26T17:36:36.896Z
+NLP Template: nlp/v1
+Developer Template: developer/v1
+
+================================================================================
+SECTION 1: NLP (USER-DEFINED) - Context & Behavior
+================================================================================
+
+### Frontend
+
+**Chat Interface**
+- What it does: Provides a user-friendly interface for users to interact with the chat system.
+- When it happens: The interface is displayed when the user accesses the chat page.
+- Why it matters: The interface allows users to engage with the chat system, sending and receiving messages.
+
+**Auto-Scroll Feature**
+- What it does: Automatically scrolls the chat window to the bottom when new messages are received.
+- When it happens: The auto-scroll feature is triggered when new messages are added to the chat session.
+- Why it matters: The auto-scroll feature ensures that users can easily view new messages without having to manually scroll through the chat window.
+
+**Auto-Resize Textarea**
+- What it does: Automatically adjusts the height of the textarea to fit the content.
+- When it happens: The auto-resize feature is triggered when the user types in the textarea.
+- Why it matters: The auto-resize feature provides a better user experience by ensuring that the textarea is always large enough to display the content.
+
+**Create New Session**
+- What it does: Creates a new chat session with a unique ID.
+- When it happens: The create new session feature is triggered when the user clicks the "New Chat" button.
+- Why it matters: The create new session feature allows users to start a new conversation.
+
+**Delete Session**
+- What it does: Deletes a chat session and its associated messages.
+- When it happens: The delete session feature is triggered when the user clicks the "Delete Chat" button.
+- Why it matters: The delete session feature allows users to remove unwanted conversations.
+
+**Stop Generation**
+- What it does: Stops the chat system from generating new messages.
+- When it happens: The stop generation feature is triggered when the user clicks the "Stop Generating" button.
+- Why it matters: The stop generation feature allows users to control the chat system's output.
+
+**Send Message**
+- What it does: Sends a message to the chat system and receives a response.
+- When it happens: The send message feature is triggered when the user clicks the "Send Message" button.
+- Why it matters: The send message feature allows users to engage with the chat system and receive responses.
+
+**Format Message Content**
+- What it does: Formats the message content using basic markdown syntax.
+- When it happens: The format message content feature is triggered when a message is received.
+- Why it matters: The format message content feature improves the readability of the chat interface.
+
+**Copy Message**
+- What it does: Copies the message content to the clipboard.
+- When it happens: The copy message feature is triggered when the user clicks the "Copy Message" button.
+- Why it matters: The copy message feature allows users to easily share the message content.
+
+### Backend
+
+**Process Messages**
+- What it handles: Processes incoming messages and generates responses.
+- How it protects or validates: The system verifies the incoming messages and generates responses based on the input.
+- What happens if conditions are not met: If the input is invalid, the system generates an error message.
+
+**Handle API Requests**
+- What it handles: Handles API requests from the frontend and sends responses back.
+- How it protects or validates: The system verifies the API requests and sends responses based on the input.
+- What happens if conditions are not met: If the API request is invalid, the system generates an error message.
+
+**Generate Responses**
+- What it handles: Generates responses to incoming messages.
+- How it protects or validates: The system verifies the incoming messages and generates responses based on the input.
+- What happens if conditions are not met: If the input is invalid, the system generates an error message.
+
+### Database
+
+**Chat Sessions**
+- What is stored: Chat sessions with unique IDs, titles, and messages.
+- When it is updated: The chat sessions are updated when a new message is received or when a session is deleted.
+- Why it is important: The chat sessions store the conversation history and allow users to access previous conversations.
+
+**Messages**
+- What is stored: Messages with unique IDs, roles, content, and timestamps.
+- When it is updated: The messages are updated when a new message is received or when a session is deleted.
+- Why it is important: The messages store the conversation history and allow users to access previous messages.
+
+**User Data**
+- What is stored: User data, such as session IDs and input messages.
+- When it is updated: The user data is updated when a user interacts with the chat system.
+- Why it is important: The user data allows the chat system to personalize the experience and provide relevant responses.
+
+================================================================================
+SECTION 2: DEVELOPER PROMPTS - Technical & Precise
+================================================================================
+
+### FRONTEND:
+
+-------------
+
+
+FILE METADATA:
+  Path: /path/to/file
+  Language: JavaScript
+  Framework (if identifiable): Next.js
+  Component/Module Type: React functional component
+  Exports/Public Interfaces: ChatsPage
+
+
+IMPORTS / DEPENDENCIES:
+  - Internal Modules:
+    - React
+    - useTheme
+    - ThemeToggle
+  - External Libraries:
+    - next
+    - @/components/ThemeProvider
+    - @/components/ThemeToggle
+
+
+STRUCTURE:
+  - Component/Class/Function Name: ChatsPage
+  - Props/Inputs:
+    - theme
+  - State Variables (with inferred types):
+    - sessions: ChatSession[]
+    - activeSessionId: string | null
+    - input: string
+    - isLoading: boolean
+    - sidebarOpen: boolean
+  - Derived State:
+    - activeSession: ChatSession | null
+  - Context Usage:
+    - useTheme
+  - Refs (if present):
+    - messagesEndRef
+    - inputRef
+    - abortControllerRef
+
+
+CORE MECHANISMS:
+
+1. Feature Name: Create New Session
+   - Trigger: Button click
+   - Execution Flow:
+     1. Generate new session ID
+     2. Create new session object
+     3. Update sessions state
+     4. Set active session ID
+   - Conditional Logic:
+     - Check if sessions state is empty
+   - Payload Structure:
+     - New session object
+   - External Calls:
+     - None
+   - Timing Logic (if any):
+     - None
+   - Constraints:
+     - None
+
+
+2. Feature Name: Delete Session
+   - Trigger: Button click
+   - Execution Flow:
+     1. Filter out session to delete
+     2. Update sessions state
+     3. Set active session ID
+   - Conditional Logic:
+     - Check if session ID matches active session ID
+   - Payload Structure:
+     - Session ID
+   - External Calls:
+     - None
+   - Timing Logic (if any):
+     - None
+   - Constraints:
+     - None
+
+
+EVENT HANDLERS:
+
+- Event: KeyDown
+- Bound Function: handleKeyDown
+- State Impact:
+  - Update input state
+- Side Effects:
+  - Prevent default behavior
+
+
+API INTERACTIONS:
+
+- Endpoint: /api/chat
+- Method: POST
+- Request Body Shape:
+  - messages: Message[]
+- Response Shape:
+  - JSON object
+- Error Handling:
+  - Catch and handle AbortError
+  - Catch and handle other errors
+
+
+STATE MODEL:
+
+- Variable Name: sessions Type: ChatSession[]
+- Mutation Points:
+  - setSessions
+- Lifecycle Dependencies:
+  - useTheme
+
+
+EDGE CASE HANDLING:
+
+- Validation Rules:
+  - Check if input is not empty
+  - Check if active session ID is not null
+- Submission Restrictions:
+  - None
+- Auto-trigger Conditions:
+  - None
+
+
+----------------------------------------------------
+
+### BACKEND:
+
+------------
+
+
+FILE METADATA:
+  Path: /path/to/file
+  Language: JavaScript
+  Framework (if identifiable): Next.js
+  Controller/Router Type: API route
+
+
+ENDPOINTS:
+
+1. METHOD /api/chat
+   - Input Parameters:
+     - messages: Message[]
+   - Validation Rules:
+     - Check if messages array is not empty
+   - Authentication Requirement:
+     - None
+   - Authorization Rules:
+     - None
+   - Processing Steps (ordered):
+     1. Handle POST request
+     2. Process messages array
+     3. Send response
+   - Database Interaction:
+     - None
+   - External Service Calls:
+     - None
+   - Response Format:
+     - JSON object
+   - Status Codes:
+     - 200 OK
+
+
+BUSINESS RULES:
+
+- Rule Name: Check if messages array is not empty
+- Enforcement Location:
+  - API route
+- Failure Response:
+  - 400 Bad Request
+
+
+DATA PROCESSING:
+
+- Filtering Logic:
+  - None
+- Field Exclusions:
+  - None
+- Transformation Steps:
+  - None
+
+
+SECURITY CONTROLS:
+
+- Sensitive Field Protection:
+  - None
+- Input Sanitization:
+  - None
+- Integrity Checks:
+  - None
+- Rate Limiting (if present):
+  - None
+
+
+ASYNC / BACKGROUND TASKS:
+
+- Trigger Condition:
+  - None
+- Execution Flow:
+  - None
+- Side Effects:
+  - None
+
+
+----------------------------------------------------
+
+### DATABASE:
+
+-------------
+
+
+PERSISTENCE TYPE:
+  (SQL / NoSQL / ORM / Raw Queries / Other) Not Applicable - Source code is frontend only
+
+
+MODELS / TABLES:
+
+Entity Name:
+  - Not Explicitly Defined in Provided Code
+
+
+RELATIONSHIPS:
+
+- One-to-One:
+  - Not Explicitly Defined in Provided Code
+- One-to-Many:
+  - Not Explicitly Defined in Provided Code
+- Many-to-Many:
+  - Not Explicitly Defined in Provided Code
+
+
+TRANSACTION LOGIC:
+
+- Atomic Operations:
+  - Not Explicitly Defined in Provided Code
+- Upsert Rules:
+  - Not Explicitly Defined in Provided Code
+- Cascade Behavior:
+  - Not Explicitly Defined in Provided Code
+
+
+DATA INTEGRITY RULES:
+
+- Unique Constraints:
+  - Not Explicitly Defined in Provided Code
+- Required Fields:
+  - Not Explicitly Defined in Provided Code
+- Enum Restrictions:
+  - Not Explicitly Defined in Provided Code
+- Soft Delete (if present):
+  - Not Explicitly Defined in Provided Code
+
+
+STORAGE / EXTERNAL DATA SERVICES:
+
+- Service Name:
+  - Not Explicitly Defined in Provided Code
+- Purpose:
+  - Not Explicitly Defined in Provided Code
+- Integration Type:
+  - Not Explicitly Defined in Provided Code
+
+================================================================================
+                              END OF PROMPT
+================================================================================

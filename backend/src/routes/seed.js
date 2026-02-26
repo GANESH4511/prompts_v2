@@ -587,7 +587,7 @@ async function seedProject(rootDir, projectId) {
                 purpose: `Source code: ${folderPath}/${fileName}`,
                 category: fileCategory,
                 promptFilePath: null,
-                rawContent: sourceCode,
+                rawContent: null,
                 projectId: projectId || null,
                 sections: {
                     create: []

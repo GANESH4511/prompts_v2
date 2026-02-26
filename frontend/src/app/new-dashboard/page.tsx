@@ -849,16 +849,14 @@ export default function NewDashboard() {
                                     </button>
                                 )}
                                 <div style={{ flex: 1 }} />
-                                {/* Re-generate Button */}
+                                {/* Re-generate / Generate Button */}
                                 <button
                                     onClick={async () => {
                                         if (!selectedPage || syncing) return
                                         const currentFilePath = selectedPage.filePath
                                         setSyncing(true)
-                                        setSyncMessage('Generating prompts from template...')
-                                        // Clear old prompt immediately so stale content is gone
-                                        setSelectedPage(prev => prev ? { ...prev, rawContent: null, sections: [] } : prev)
-                                        setEditContent('')
+                                        const hasExistingPrompt = !!selectedPage.promptFilePath
+                                        setSyncMessage(hasExistingPrompt ? 'Re-generating prompts from template...' : 'Generating prompts from template...')
                                         setEditMode(false)
                                         setPromptFilter(null)
                                         try {
@@ -869,7 +867,7 @@ export default function NewDashboard() {
                                             })
                                             const data = await res.json()
                                             if (data.success) {
-                                                setSyncMessage(`Prompts re-generated successfully! (${data.elapsed})`)
+                                                setSyncMessage(`Prompts ${hasExistingPrompt ? 're-generated' : 'generated'} successfully! (${data.elapsed})`)
                                                 // Directly fetch fresh pages and find the regenerated one
                                                 if (project) {
                                                     const freshPages = await loadPages(project.id)
@@ -880,9 +878,9 @@ export default function NewDashboard() {
                                                     }
                                                 }
                                             } else {
-                                                setSyncMessage(`Re-generate failed: ${data.error}`)
+                                                setSyncMessage(`Generation failed: ${data.error}`)
                                             }
-                                        } catch { setSyncMessage('Re-generate failed: Network error') }
+                                        } catch { setSyncMessage('Generation failed: Network error') }
                                         finally { setSyncing(false); setTimeout(() => setSyncMessage(''), 8000) }
                                     }}
                                     disabled={syncing}
@@ -900,14 +898,89 @@ export default function NewDashboard() {
                                     <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={syncing ? { animation: 'spin 1s linear infinite' } : {}}>
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
                                     </svg>
-                                    {syncing ? 'Generating...' : 'Re-generate'}
+                                    {syncing ? 'Generating...' : (selectedPage?.promptFilePath ? '✨ Re-generate' : '✨ Generate')}
                                 </button>
                             </div>
 
                             {/* Content */}
                             <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
                                 {(() => {
-                                    // Get the full prompt text
+                                    // Determine if this file has a prompt (promptFilePath set AND rawContent exists)
+                                    const hasPrompt = !!selectedPage.promptFilePath && !!selectedPage.rawContent
+
+                                    // If no prompt exists, show clear "No prompt" message with Generate action
+                                    if (!hasPrompt) {
+                                        return (
+                                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '50vh', textAlign: 'center', padding: '40px 20px' }}>
+                                                <div style={{
+                                                    width: 80, height: 80, borderRadius: 20,
+                                                    background: isDark ? '#1e293b' : '#f1f5f9',
+                                                    border: `2px dashed ${isDark ? '#334155' : '#d1d5db'}`,
+                                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                    marginBottom: 20,
+                                                }}>
+                                                    <svg width="36" height="36" fill="none" stroke={isDark ? '#64748b' : '#9ca3af'} viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                                    </svg>
+                                                </div>
+                                                <h3 style={{ fontSize: 16, fontWeight: 600, color: colors.textPrimary, marginBottom: 6, marginTop: 0 }}>
+                                                    No Prompt Found
+                                                </h3>
+                                                <p style={{ fontSize: 13, color: colors.textMuted, marginBottom: 20, maxWidth: 360 }}>
+                                                    This file doesn't have a generated prompt yet. Click the button below to generate NLP and Developer prompts from the source code.
+                                                </p>
+                                                <button
+                                                    onClick={async () => {
+                                                        if (!selectedPage || syncing) return
+                                                        const currentFilePath = selectedPage.filePath
+                                                        setSyncing(true)
+                                                        setSyncMessage('Generating prompts from template...')
+                                                        try {
+                                                            const res = await fetch(`${API_URL}/api/generate-prompts`, {
+                                                                method: 'POST',
+                                                                headers: { 'Content-Type': 'application/json' },
+                                                                body: JSON.stringify({ projectId: project?.id, filePath: currentFilePath })
+                                                            })
+                                                            const data = await res.json()
+                                                            if (data.success) {
+                                                                setSyncMessage(`Prompts generated successfully! (${data.elapsed})`)
+                                                                if (project) {
+                                                                    const freshPages = await loadPages(project.id)
+                                                                    const regeneratedPage = freshPages.find((p: Page) => p.filePath === currentFilePath)
+                                                                    if (regeneratedPage) {
+                                                                        setSelectedPage(regeneratedPage)
+                                                                        setEditContent(regeneratedPage.rawContent || '')
+                                                                    }
+                                                                }
+                                                            } else {
+                                                                setSyncMessage(`Generation failed: ${data.error}`)
+                                                            }
+                                                        } catch { setSyncMessage('Generation failed: Network error') }
+                                                        finally { setSyncing(false); setTimeout(() => setSyncMessage(''), 8000) }
+                                                    }}
+                                                    disabled={syncing}
+                                                    style={{
+                                                        display: 'flex', alignItems: 'center', gap: 8,
+                                                        padding: '10px 24px', borderRadius: 10, fontSize: 14, fontWeight: 600,
+                                                        cursor: syncing ? 'wait' : 'pointer',
+                                                        background: isDark ? '#312e81' : '#4f46e5',
+                                                        color: '#ffffff',
+                                                        border: 'none',
+                                                        transition: 'all 0.2s ease',
+                                                        outline: 'none',
+                                                        boxShadow: '0 2px 8px rgba(79, 70, 229, 0.3)',
+                                                    }}
+                                                >
+                                                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={syncing ? { animation: 'spin 1s linear infinite' } : {}}>
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                                                    </svg>
+                                                    {syncing ? 'Generating...' : '✨ Generate Prompt'}
+                                                </button>
+                                            </div>
+                                        )
+                                    }
+
+                                    // Has prompt — show prompt content with edit/filter controls
                                     const fullContent = editMode ? editContent : (selectedPage.rawContent || '')
 
                                     // Apply focused filter: extract content between ### Category markers

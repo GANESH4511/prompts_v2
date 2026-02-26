@@ -133,15 +133,24 @@ router.post('/', async (req, res) => {
         console.log(`  📂 Project: ${projectId || 'default'}`);
         console.log(`  📄 File: ${filePath}`);
 
-        // --- Step 1: Resolve and read source code ---
+        // --- Step 1: Resolve project root dynamically from DB ---
+        let resolvedRoot = PROJECT_ROOT;
+        if (projectId) {
+            const project = await prisma.project.findUnique({ where: { id: projectId } });
+            if (project && project.path) {
+                resolvedRoot = project.path.replace(/\//g, path.sep);
+                console.log(`  📁 Resolved project root from DB: ${resolvedRoot}`);
+            }
+        }
+
         let absoluteSourcePath;
 
         // If filePath is already absolute
         if (path.isAbsolute(filePath)) {
             absoluteSourcePath = filePath;
         } else {
-            // Relative to project root
-            absoluteSourcePath = path.join(PROJECT_ROOT, filePath.split('/').join(path.sep));
+            // Relative to resolved project root
+            absoluteSourcePath = path.join(resolvedRoot, filePath.split('/').join(path.sep));
         }
 
         if (!fs.existsSync(absoluteSourcePath)) {
@@ -207,24 +216,25 @@ router.post('/', async (req, res) => {
             devVersion
         });
 
-        // --- Step 7: Delete old prompt file first ---
+        // --- Step 7: Determine prompt file path ---
         const sourceDir = path.dirname(absoluteSourcePath);
         const baseName = path.basename(absoluteSourcePath, path.extname(absoluteSourcePath));
         const promptFilePath = path.join(sourceDir, `${baseName}.txt`);
         const tmpFilePath = promptFilePath + '.tmp';
 
-        // Remove old prompt file if it exists
+        // Log whether this is a new prompt or an overwrite
         if (fs.existsSync(promptFilePath)) {
-            fs.unlinkSync(promptFilePath);
-            console.log(`  🗑️  Deleted old prompt: ${promptFilePath}`);
+            console.log(`  📝 Existing prompt found — will overwrite: ${promptFilePath}`);
+        } else {
+            console.log(`  🆕 No existing prompt — will create new: ${promptFilePath}`);
         }
-        // Also clean up any stale .tmp file
+
+        // Clean up any stale .tmp file
         if (fs.existsSync(tmpFilePath)) {
             fs.unlinkSync(tmpFilePath);
         }
 
-        // --- Step 8: Write new prompt file ---
-        // Write to temp file first, then rename (atomic)
+        // --- Step 8: Write new prompt file (atomic: write tmp then rename) ---
         fs.writeFileSync(tmpFilePath, promptContent, 'utf-8');
         fs.renameSync(tmpFilePath, promptFilePath);
 
@@ -241,7 +251,7 @@ router.post('/', async (req, res) => {
 
         res.json({
             success: true,
-            promptFilePath: path.relative(PROJECT_ROOT, promptFilePath).replace(/\\/g, '/'),
+            promptFilePath: path.relative(resolvedRoot, promptFilePath).replace(/\\/g, '/'),
             absolutePromptPath: promptFilePath,
             sourceFile: filePath,
             sourceHash,
