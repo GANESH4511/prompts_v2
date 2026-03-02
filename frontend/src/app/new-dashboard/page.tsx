@@ -426,6 +426,16 @@ export default function NewDashboard() {
                 <h1 style={{ fontSize: 14, fontWeight: 600, color: colors.textPrimary, margin: 0 }}>{project?.name || 'No Project'}</h1>
                 <div style={{ flex: 1 }} />
                 <button
+                    onClick={() => router.push('/dev-dashboard')}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600, border: `1px solid ${colors.borderStrong}`, background: isDark ? '#1e1b4b' : '#f5f3ff', color: isDark ? '#c4b5fd' : '#5b21b6', cursor: 'pointer' }}
+                    title="Developer Dashboard"
+                >
+                    <svg style={{ width: 14, height: 14 }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                    </svg>
+                    Developer
+                </button>
+                <button
                     onClick={handleSync}
                     disabled={syncing}
                     style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 500, border: `1px solid ${colors.borderStrong}`, background: colors.cardBg, color: syncing ? colors.textMuted : colors.textPrimary, cursor: syncing ? 'wait' : 'pointer' }}

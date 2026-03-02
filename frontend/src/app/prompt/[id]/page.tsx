@@ -50,6 +50,7 @@ interface Page {
     totalLines: number
     purpose: string
     rawContent: string | null
+    promptFilePath: string | null
     sections: Section[]
     stateVars: StateVar[]
     functions: PageFunc[]
@@ -179,6 +180,7 @@ export default function PromptDetailPage() {
     const searchParams = useSearchParams()
     const pageId = params.id as string
     const isEmbedded = searchParams.get('embedded') === 'true'
+    const projectId = searchParams.get('projectId')
 
     const [page, setPage] = useState<Page | null>(null)
     const [masterPrompt, setMasterPrompt] = useState<MasterPrompt | null>(null)
@@ -315,45 +317,35 @@ export default function PromptDetailPage() {
         document.body.removeChild(element)
     }
 
-    // Generate prompts from source code via LLM
+    // Generate prompts from source code via LLM (matches new-dashboard logic)
     const handleGenerate = async () => {
         if (!page || isGenerating) return
         setIsGenerating(true)
-        setGenerateStatus('Loading templates...')
+        const hasExistingPrompt = !!page.promptFilePath
+        setGenerateStatus(hasExistingPrompt ? 'Re-generating prompts from template...' : 'Generating prompts from template...')
         try {
-            setGenerateStatus('Generating NLP & Developer prompts...')
-            const result = await apiRequest<{
-                success: boolean
-                promptFilePath: string
-                elapsed: string
-                error?: string
-                errorCategory?: string
-            }>('/api/generate-prompts', {
+            const res = await fetch(`${API_URL}/api/generate-prompts`, {
                 method: 'POST',
-                body: { filePath: page.filePath }
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ projectId: projectId || undefined, filePath: page.filePath })
             })
+            const data = await res.json()
 
-            if (result.success && result.data?.success) {
-                setGenerateStatus('Syncing database...')
-                // Wait a brief moment for sync to settle
-                await new Promise(resolve => setTimeout(resolve, 500))
-                setGenerateStatus('Refreshing page data...')
-                // Re-fetch page data to show the new prompts
+            if (data.success) {
+                setGenerateStatus(`Prompts ${hasExistingPrompt ? 're-generated' : 'generated'} successfully! (${data.elapsed})`)
+                // Refresh page data to show the new prompts
                 await fetchPageData()
-                setGenerateStatus('')
-                alert(`✅ Prompts generated successfully!\n\n📄 File: ${result.data.promptFilePath}\n⏱ Elapsed: ${result.data.elapsed}`)
+                setTimeout(() => setGenerateStatus(''), 8000)
             } else {
-                const errorMsg = result.data?.error || result.error || 'Generation failed'
-                setGenerateStatus('')
-                alert(`❌ Generation failed:\n${errorMsg}`)
+                setGenerateStatus(`Generation failed: ${data.error}`)
+                setTimeout(() => setGenerateStatus(''), 8000)
             }
         } catch (err) {
             console.error('Generate error:', err)
-            setGenerateStatus('')
-            alert('❌ Failed to generate prompts. Check the backend console for details.')
+            setGenerateStatus('Generation failed: Network error')
+            setTimeout(() => setGenerateStatus(''), 8000)
         } finally {
             setIsGenerating(false)
-            setGenerateStatus('')
         }
     }
 
@@ -641,28 +633,28 @@ export default function PromptDetailPage() {
                     </div>
 
                     <div className="topbar-right">
-                        {page.rawContent && (
+                        <button
+                            className={`topbar-action-btn generate-btn ${isGenerating ? 'generating' : ''}`}
+                            onClick={handleGenerate}
+                            disabled={isGenerating}
+                            title={isGenerating ? generateStatus : 'Generate prompts from source code'}
+                        >
+                            {isGenerating ? (
+                                <>
+                                    <span className="generate-spinner" />
+                                    Generating...
+                                </>
+                            ) : (
+                                <>
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round" strokeLinejoin="round" />
+                                    </svg>
+                                    {page.promptFilePath ? '✨ Re-generate' : '✨ Generate'}
+                                </>
+                            )}
+                        </button>
+                        {page.promptFilePath && (
                             <>
-                                <button
-                                    className={`topbar-action-btn generate-btn ${isGenerating ? 'generating' : ''}`}
-                                    onClick={handleGenerate}
-                                    disabled={isGenerating}
-                                    title={isGenerating ? generateStatus : 'Generate prompts from source code'}
-                                >
-                                    {isGenerating ? (
-                                        <>
-                                            <span className="generate-spinner" />
-                                            {generateStatus || 'Generating...'}
-                                        </>
-                                    ) : (
-                                        <>
-                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round" strokeLinejoin="round" />
-                                            </svg>
-                                            Generate
-                                        </>
-                                    )}
-                                </button>
                                 <button onClick={downloadFile} className="topbar-action-btn download-btn">
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                         <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" strokeLinecap="round" strokeLinejoin="round" />
@@ -678,36 +670,34 @@ export default function PromptDetailPage() {
                                     </svg>
                                     Edit File
                                 </button>
-                                <ThemeToggle />
                             </>
                         )}
-                        {!page.rawContent && (
-                            <>
-                                <button
-                                    className={`topbar-action-btn generate-btn ${isGenerating ? 'generating' : ''}`}
-                                    onClick={handleGenerate}
-                                    disabled={isGenerating}
-                                    title={isGenerating ? generateStatus : 'Generate prompts from source code'}
-                                >
-                                    {isGenerating ? (
-                                        <>
-                                            <span className="generate-spinner" />
-                                            {generateStatus || 'Generating...'}
-                                        </>
-                                    ) : (
-                                        <>
-                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round" strokeLinejoin="round" />
-                                            </svg>
-                                            Generate
-                                        </>
-                                    )}
-                                </button>
-                                <ThemeToggle />
-                            </>
-                        )}
+                        <ThemeToggle />
                     </div>
                 </header>
+
+                {/* Generate Status Banner */}
+                {generateStatus && (
+                    <div style={{
+                        padding: '8px 16px',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        textAlign: 'center',
+                        background: generateStatus.includes('failed') || generateStatus.includes('Failed')
+                            ? 'rgba(239, 68, 68, 0.1)'
+                            : generateStatus.includes('successfully')
+                                ? 'rgba(16, 185, 129, 0.1)'
+                                : 'rgba(59, 130, 246, 0.1)',
+                        color: generateStatus.includes('failed') || generateStatus.includes('Failed')
+                            ? '#ef4444'
+                            : generateStatus.includes('successfully')
+                                ? '#10b981'
+                                : '#3b82f6',
+                        borderBottom: '1px solid rgba(255,255,255,0.05)',
+                    }}>
+                        {generateStatus}
+                    </div>
+                )}
 
                 {/* Controls Bar */}
                 <div className="prompt-controls">
