@@ -648,6 +648,128 @@ const FileDetailView = ({ page, masterPrompt, onClose, onSave }: {
     const [isEditing, setIsEditing] = useState(false)
     const [searchQuery, setSearchQuery] = useState('')
 
+    // Implement feature states
+    const [isImplementing, setIsImplementing] = useState(false)
+    const [implementStatus, setImplementStatus] = useState<string>('')
+    const [showDiffModal, setShowDiffModal] = useState(false)
+    const [implementDiffs, setImplementDiffs] = useState<any[]>([])
+    const [implementSessionId, setImplementSessionId] = useState<string>('')
+    const [implementMemory, setImplementMemory] = useState<string>('')
+    const [suggestedFiles, setSuggestedFiles] = useState<any[]>([])
+    const [lastHistoryId, setLastHistoryId] = useState<string | null>(null)
+    const [isApplying, setIsApplying] = useState(false)
+    const [isUndoing, setIsUndoing] = useState(false)
+
+    const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
+
+    const handleImplement = async () => {
+        if (!page.rawContent || isImplementing) return
+        setIsImplementing(true)
+        setImplementStatus('Analyzing prompt and generating code changes...')
+
+        try {
+            const res = await fetch(`${API_URL}/api/implement`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    pageId: page.id,
+                    promptContent: page.rawContent,
+                    scope: 'single'
+                })
+            })
+            const data = await res.json()
+
+            if (data.success) {
+                setImplementDiffs(data.diffs || [])
+                setImplementSessionId(data.sessionId)
+                setImplementMemory(data.memory || '')
+                setSuggestedFiles(data.suggestedFiles || [])
+                setShowDiffModal(true)
+                setImplementStatus(`Preview ready (${data.elapsed})`)
+            } else {
+                setImplementStatus(`Failed: ${data.error}`)
+                setTimeout(() => setImplementStatus(''), 8000)
+            }
+        } catch (err) {
+            setImplementStatus('Failed: Network error')
+            setTimeout(() => setImplementStatus(''), 8000)
+        } finally {
+            setIsImplementing(false)
+        }
+    }
+
+    const handleApplyChanges = async () => {
+        if (!implementSessionId || isApplying) return
+        setIsApplying(true)
+        setImplementStatus('Applying changes...')
+
+        try {
+            const res = await fetch(`${API_URL}/api/implement/apply`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionId: implementSessionId, selectedDiffs: implementDiffs })
+            })
+            const data = await res.json()
+
+            if (data.success) {
+                setLastHistoryId(data.historyId)
+                setShowDiffModal(false)
+                setImplementStatus(`\u2705 Applied (${data.filesChanged} file(s)) — ${data.elapsed}`)
+                setTimeout(() => setImplementStatus(''), 10000)
+            } else {
+                setImplementStatus(`Apply failed: ${data.error}`)
+                setTimeout(() => setImplementStatus(''), 8000)
+            }
+        } catch (err) {
+            setImplementStatus('Apply failed: Network error')
+            setTimeout(() => setImplementStatus(''), 8000)
+        } finally {
+            setIsApplying(false)
+        }
+    }
+
+    const handleUndo = async () => {
+        if (!lastHistoryId || isUndoing) return
+        setIsUndoing(true)
+        setImplementStatus('Reverting...')
+
+        try {
+            const res = await fetch(`${API_URL}/api/implement/undo`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ historyId: lastHistoryId })
+            })
+            const data = await res.json()
+
+            if (data.success) {
+                setLastHistoryId(null)
+                setImplementStatus(`\u21a9\ufe0f Reverted (${data.restoredFiles} file(s))`)
+                setTimeout(() => setImplementStatus(''), 8000)
+            } else {
+                setImplementStatus(`Undo failed: ${data.error}`)
+                setTimeout(() => setImplementStatus(''), 8000)
+            }
+        } catch (err) {
+            setImplementStatus('Undo failed: Network error')
+            setTimeout(() => setImplementStatus(''), 8000)
+        } finally {
+            setIsUndoing(false)
+        }
+    }
+
+    // Keyboard shortcut
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.ctrlKey && e.shiftKey && e.key === 'I') {
+                e.preventDefault()
+                handleImplement()
+            }
+            if (e.key === 'Escape' && showDiffModal) setShowDiffModal(false)
+        }
+        window.addEventListener('keydown', handleKeyDown)
+        return () => window.removeEventListener('keydown', handleKeyDown)
+    }, [showDiffModal, isImplementing])
+
     const toggleSection = (id: string) => {
         const next = new Set(expandedSections)
         if (next.has(id)) next.delete(id)
@@ -726,16 +848,39 @@ const FileDetailView = ({ page, masterPrompt, onClose, onSave }: {
                             {page.rawContent && (
                                 <>
                                     <button
+                                        onClick={handleImplement}
+                                        disabled={isImplementing}
+                                        className={`topbar-action-btn implement-btn ${isImplementing ? 'implementing' : ''}`}
+                                        title={isImplementing ? implementStatus : 'Implement changes (Ctrl+Shift+I)'}
+                                        style={{ padding: '6px 12px', fontSize: '11px', borderRadius: '8px' }}
+                                    >
+                                        {isImplementing ? (
+                                            <><span className="generate-spinner" style={{ width: 12, height: 12 }} /> Implementing...</>
+                                        ) : (
+                                            '\ud83d\ude80 Implement'
+                                        )}
+                                    </button>
+                                    {lastHistoryId && (
+                                        <button
+                                            onClick={handleUndo}
+                                            disabled={isUndoing}
+                                            className="topbar-action-btn undo-btn"
+                                            style={{ padding: '6px 12px', fontSize: '11px', borderRadius: '8px' }}
+                                        >
+                                            {isUndoing ? '\u21a9\ufe0f Undoing...' : '\u21a9\ufe0f Undo'}
+                                        </button>
+                                    )}
+                                    <button
                                         onClick={downloadFile}
                                         className="px-2 sm:px-3 py-1.5 sm:py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-700 text-[10px] sm:text-xs rounded-lg border border-slate-300 dark:border-slate-600 transition-colors"
                                     >
-                                        <span className="hidden xs:inline">⬇️ </span>Download
+                                        <span className="hidden xs:inline">\u2b07\ufe0f </span>Download
                                     </button>
                                     <button
                                         onClick={() => setIsEditing(!isEditing)}
                                         className={`px-2 sm:px-3 py-1.5 sm:py-2 text-[10px] sm:text-xs rounded-lg border transition-colors ${isEditing ? 'bg-indigo-600 border-indigo-500' : 'bg-slate-100 dark:bg-slate-800 hover:bg-slate-700 border-slate-300 dark:border-slate-600'}`}
                                     >
-                                        ✏️ <span className="hidden xs:inline">{isEditing ? 'Editing' : 'Edit'}</span>
+                                        \u270f\ufe0f <span className="hidden xs:inline">{isEditing ? 'Editing' : 'Edit'}</span>
                                     </button>
                                 </>
                             )}
@@ -750,6 +895,16 @@ const FileDetailView = ({ page, masterPrompt, onClose, onSave }: {
 
                     {/* Purpose */}
                     <p className="mt-3 sm:mt-4 text-sm sm:text-base text-slate-700 dark:text-slate-300 line-clamp-2">{page.purpose}</p>
+
+                    {/* Implement Status Banner */}
+                    {implementStatus && (
+                        <div className={`implement-status-banner mt-2 rounded-lg ${implementStatus.includes('failed') || implementStatus.includes('Failed') ? 'error' :
+                                implementStatus.includes('\u2705') || implementStatus.includes('Applied') ? 'success' :
+                                    implementStatus.includes('\u21a9\ufe0f') || implementStatus.includes('Reverted') ? 'info' : 'loading'
+                            }`}>
+                            {implementStatus}
+                        </div>
+                    )}
                 </div>
 
                 {/* Content */}
@@ -1069,6 +1224,79 @@ const FileDetailView = ({ page, masterPrompt, onClose, onSave }: {
                     )}
                 </div>
             </div>
+
+            {/* Diff Preview Modal */}
+            {showDiffModal && (
+                <div className="diff-modal-overlay" onClick={() => setShowDiffModal(false)}>
+                    <div className="diff-modal" onClick={e => e.stopPropagation()}>
+                        <div className="diff-modal-header">
+                            <div className="diff-modal-title">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                                Implementation Preview
+                            </div>
+                            <div className="diff-modal-actions">
+                                <button className="diff-action-btn reject" onClick={() => setShowDiffModal(false)}>\u2715 Reject</button>
+                                <button className="diff-action-btn apply" onClick={handleApplyChanges} disabled={isApplying}>
+                                    {isApplying ? '\u23f3 Applying...' : '\u2705 Apply Changes'}
+                                </button>
+                            </div>
+                        </div>
+                        {implementMemory && (
+                            <div className="diff-memory"><strong>\ud83e\udde0 AI Understanding:</strong> {implementMemory}</div>
+                        )}
+                        {suggestedFiles.length > 0 && (
+                            <div className="diff-suggested">
+                                <strong>\ud83d\udcc1 Suggested related files:</strong>
+                                {suggestedFiles.map((sf: any, i: number) => (
+                                    <div key={i} className="diff-suggested-file">
+                                        <span>{sf.filePath}</span>
+                                        <span className="diff-suggested-reason">{sf.reason}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        <div className="diff-files">
+                            {implementDiffs.map((diff: any, idx: number) => (
+                                <div key={idx} className="diff-file-block">
+                                    <div className="diff-file-header">
+                                        <span className={`diff-file-badge ${diff.isNew ? 'new' : 'modified'}`}>
+                                            {diff.isNew ? 'NEW' : 'MODIFIED'}
+                                        </span>
+                                        <span className="diff-file-path">{diff.filePath}</span>
+                                        <span className="diff-file-desc">{diff.description}</span>
+                                    </div>
+                                    <div className="diff-content">
+                                        <div className="diff-side old">
+                                            <div className="diff-side-header">Original</div>
+                                            <pre className="diff-code">
+                                                {diff.oldCode ? diff.oldCode.split('\n').map((line: string, i: number) => (
+                                                    <div key={i} className="diff-line">
+                                                        <span className="diff-line-num">{i + 1}</span>
+                                                        <span className="diff-line-content">{line}</span>
+                                                    </div>
+                                                )) : <div className="diff-empty">New file</div>}
+                                            </pre>
+                                        </div>
+                                        <div className="diff-side new">
+                                            <div className="diff-side-header">Modified</div>
+                                            <pre className="diff-code">
+                                                {diff.newCode.split('\n').map((line: string, i: number) => (
+                                                    <div key={i} className="diff-line">
+                                                        <span className="diff-line-num">{i + 1}</span>
+                                                        <span className="diff-line-content">{line}</span>
+                                                    </div>
+                                                ))}
+                                            </pre>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     )
 }
@@ -1444,10 +1672,13 @@ export default function Home() {
                                         const tabPage = pages.find(p => p.id === tabId)
                                         if (!tabPage) return null
                                         return (
-                                            <button
+                                            <div
                                                 key={tabId}
                                                 className={`ide-tab ${selectedPageId === tabId ? 'active' : ''}`}
                                                 onClick={() => setSelectedPageId(tabId)}
+                                                role="tab"
+                                                tabIndex={0}
+                                                onKeyDown={(e) => { if (e.key === 'Enter') setSelectedPageId(tabId) }}
                                             >
                                                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                                                     <path d="M3 1h7l3 3v10.5a.5.5 0 01-.5.5h-9a.5.5 0 01-.5-.5v-13A.5.5 0 013 1z" fill={getFileColor(tabPage.filePath)} opacity="0.85" />
@@ -1458,7 +1689,7 @@ export default function Home() {
                                                     onClick={(e) => { e.stopPropagation(); closeTab(tabId) }}
                                                     title="Close"
                                                 >×</button>
-                                            </button>
+                                            </div>
                                         )
                                     })}
                                 </div>

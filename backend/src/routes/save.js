@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { prisma } = require('../lib/prisma');
+const { resolveProjectRoot } = require('../lib/resolveProject');
 
 const router = express.Router();
 
@@ -39,17 +40,19 @@ router.post('/', async (req, res) => {
 
         // If no promptFilePath is linked, derive it from the source file path
         if (!targetFilePath && page.filePath) {
-            // Determine project root to resolve relative filePath
-            let rootDir = null;
-            const pid = projectId || page.projectId;
-            if (pid) {
-                const project = await prisma.project.findUnique({ where: { id: pid } });
-                if (project) {
-                    rootDir = project.path.replace(/\//g, path.sep);
-                }
-            }
+            // Determine project root from DB
+            const resolved = await resolveProjectRoot({
+                projectId: projectId || page.projectId,
+                pageId,
+                filePath: page.filePath
+            });
+            const rootDir = resolved.rootDir;
+
             if (!rootDir) {
-                rootDir = process.env.PROJECT_ROOT || 'C:\\SNIX\\sify\\HrAssist\\exam';
+                return res.status(400).json({
+                    success: false,
+                    error: 'No project found for this page. Please ensure it belongs to a registered project.'
+                });
             }
 
             // Derive .txt path from the source code path

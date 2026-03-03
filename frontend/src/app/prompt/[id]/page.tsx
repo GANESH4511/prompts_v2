@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { apiRequest, getAccessToken, clearAuthData } from '@/lib/api'
 import { ThemeToggle } from '@/components/ThemeToggle'
@@ -51,6 +51,7 @@ interface Page {
     purpose: string
     rawContent: string | null
     promptFilePath: string | null
+    projectId: string | null
     sections: Section[]
     stateVars: StateVar[]
     functions: PageFunc[]
@@ -205,6 +206,20 @@ export default function PromptDetailPage() {
     const [generateStatus, setGenerateStatus] = useState<string>('')
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
+    // Implement feature states
+    const [isImplementing, setIsImplementing] = useState(false)
+    const [implementStatus, setImplementStatus] = useState<string>('')
+    const [showDiffModal, setShowDiffModal] = useState(false)
+    const [implementDiffs, setImplementDiffs] = useState<any[]>([])
+    const [implementSessionId, setImplementSessionId] = useState<string>('')
+    const [implementMemory, setImplementMemory] = useState<string>('')
+    const [suggestedFiles, setSuggestedFiles] = useState<any[]>([])
+    const [lastHistoryId, setLastHistoryId] = useState<string | null>(null)
+    const [isApplying, setIsApplying] = useState(false)
+    const [isUndoing, setIsUndoing] = useState(false)
+    const [showImplementBanner, setShowImplementBanner] = useState(false)
+    const [contextMenu, setContextMenu] = useState<{ x: number; y: number; visible: boolean }>({ x: 0, y: 0, visible: false })
+
     useEffect(() => {
         const token = getAccessToken()
         if (!token) {
@@ -214,11 +229,13 @@ export default function PromptDetailPage() {
         fetchPageData()
     }, [pageId])
 
-    const fetchPageData = async () => {
-        setLoading(true)
+    const fetchPageData = async (silent = false) => {
+        if (!silent) setLoading(true)
         setError(null)
         try {
-            const result = await apiRequest<{ pages: Page[], masterPrompts: MasterPrompt[] }>('/api/pages')
+            // Pass projectId to scope the query if available
+            const queryParams = projectId ? `?projectId=${projectId}` : ''
+            const result = await apiRequest<{ pages: Page[], masterPrompts: MasterPrompt[] }>(`/api/pages${queryParams}`)
 
             if (result.status === 401) {
                 clearAuthData()
@@ -227,9 +244,20 @@ export default function PromptDetailPage() {
             }
 
             if (result.success && result.data) {
-                const foundPage = result.data.pages.find(p => p.id === pageId)
+                // After generation, the seed deletes and recreates DB records, changing the page ID.
+                // First try exact ID match, then fall back to matching by filePath.
+                let foundPage = result.data.pages.find(p => p.id === pageId)
+                if (!foundPage && page) {
+                    foundPage = result.data.pages.find(p => p.filePath === page.filePath)
+                }
                 if (foundPage) {
+                    // Always update the page state with the latest data
                     setPage(foundPage)
+                    // If the ID changed, silently update the browser URL (no navigation/re-render needed)
+                    if (foundPage.id !== pageId) {
+                        const newUrl = `/prompt/${foundPage.id}${window.location.search}`
+                        window.history.replaceState(window.history.state, '', newUrl)
+                    }
                     const foundMasterPrompt = result.data.masterPrompts.find(m => m.pageFilePath === foundPage.filePath)
                     if (foundMasterPrompt) {
                         setMasterPrompt(foundMasterPrompt)
@@ -244,13 +272,13 @@ export default function PromptDetailPage() {
             console.error('Fetch error:', err)
             setError('Could not load data. Ensure the backend server is running.')
         } finally {
-            setLoading(false)
+            if (!silent) setLoading(false)
         }
     }
 
     // Fetch the actual source code from the codebase
     const fetchSourceCode = async () => {
-        if (!pageId) return
+        if (!page) return
         setSourceCodeLoading(true)
         setSourceCodeError(null)
         try {
@@ -259,7 +287,7 @@ export default function PromptDetailPage() {
                 sourceCode: string
                 filePath: string
                 lastModified: string
-            }>(`/api/code/${pageId}`)
+            }>(`/api/code/${page.id}`)
 
             if (result.success && result.data) {
                 setSourceCode(result.data.sourceCode)
@@ -327,14 +355,14 @@ export default function PromptDetailPage() {
             const res = await fetch(`${API_URL}/api/generate-prompts`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ projectId: projectId || undefined, filePath: page.filePath })
+                body: JSON.stringify({ projectId: projectId || page.projectId || undefined, filePath: page.filePath })
             })
             const data = await res.json()
 
             if (data.success) {
                 setGenerateStatus(`Prompts ${hasExistingPrompt ? 're-generated' : 'generated'} successfully! (${data.elapsed})`)
-                // Refresh page data to show the new prompts
-                await fetchPageData()
+                // Refresh page data to show the new prompts (silent = no loading spinner)
+                await fetchPageData(true)
                 setTimeout(() => setGenerateStatus(''), 8000)
             } else {
                 setGenerateStatus(`Generation failed: ${data.error}`)
@@ -347,6 +375,164 @@ export default function PromptDetailPage() {
         } finally {
             setIsGenerating(false)
         }
+    }
+
+    // ==========================================
+    // IMPLEMENT FEATURE
+    // ==========================================
+
+    // Generate implementation preview (diff)
+    const handleImplement = useCallback(async (customPrompt?: string) => {
+        if (!page || isImplementing) return
+        setIsImplementing(true)
+        setImplementStatus('Analyzing prompt and generating code changes...')
+
+        try {
+            const promptContent = customPrompt || getDisplayContent()
+            if (!promptContent.trim()) {
+                setImplementStatus('No prompt content to implement.')
+                setTimeout(() => setImplementStatus(''), 5000)
+                return
+            }
+
+            const res = await fetch(`${API_URL}/api/implement`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    pageId: page.id,
+                    promptContent,
+                    scope: 'single'
+                })
+            })
+            const data = await res.json()
+
+            if (data.success) {
+                setImplementDiffs(data.diffs || [])
+                setImplementSessionId(data.sessionId)
+                setImplementMemory(data.memory || '')
+                setSuggestedFiles(data.suggestedFiles || [])
+                setShowDiffModal(true)
+                setImplementStatus(`Preview ready (${data.elapsed})`)
+            } else {
+                setImplementStatus(`Implementation failed: ${data.error}`)
+                setTimeout(() => setImplementStatus(''), 8000)
+            }
+        } catch (err) {
+            console.error('Implement error:', err)
+            setImplementStatus('Implementation failed: Network error')
+            setTimeout(() => setImplementStatus(''), 8000)
+        } finally {
+            setIsImplementing(false)
+        }
+    }, [page, isImplementing])
+
+    // Apply confirmed changes
+    const handleApplyChanges = async () => {
+        if (!implementSessionId || isApplying) return
+        setIsApplying(true)
+        setImplementStatus('Applying changes...')
+
+        try {
+            const res = await fetch(`${API_URL}/api/implement/apply`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sessionId: implementSessionId,
+                    selectedDiffs: implementDiffs
+                })
+            })
+            const data = await res.json()
+
+            if (data.success) {
+                setLastHistoryId(data.historyId)
+                setShowDiffModal(false)
+                setImplementStatus(`✅ Changes applied successfully! (${data.filesChanged} file(s)) — ${data.elapsed}`)
+                setShowImplementBanner(false)
+                // Refresh page data
+                await fetchPageData(true)
+                if (viewMode === 'code') fetchSourceCode()
+                setTimeout(() => setImplementStatus(''), 10000)
+            } else {
+                setImplementStatus(`Apply failed: ${data.error}`)
+                setTimeout(() => setImplementStatus(''), 8000)
+            }
+        } catch (err) {
+            console.error('Apply error:', err)
+            setImplementStatus('Apply failed: Network error')
+            setTimeout(() => setImplementStatus(''), 8000)
+        } finally {
+            setIsApplying(false)
+        }
+    }
+
+    // Undo/rollback changes
+    const handleUndo = async () => {
+        if (!lastHistoryId || isUndoing) return
+        setIsUndoing(true)
+        setImplementStatus('Reverting changes...')
+
+        try {
+            const res = await fetch(`${API_URL}/api/implement/undo`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ historyId: lastHistoryId })
+            })
+            const data = await res.json()
+
+            if (data.success) {
+                setLastHistoryId(null)
+                setImplementStatus(`↩️ Changes reverted (${data.restoredFiles} file(s) restored)`)
+                await fetchPageData(true)
+                if (viewMode === 'code') fetchSourceCode()
+                setTimeout(() => setImplementStatus(''), 8000)
+            } else {
+                setImplementStatus(`Undo failed: ${data.error}`)
+                setTimeout(() => setImplementStatus(''), 8000)
+            }
+        } catch (err) {
+            console.error('Undo error:', err)
+            setImplementStatus('Undo failed: Network error')
+            setTimeout(() => setImplementStatus(''), 8000)
+        } finally {
+            setIsUndoing(false)
+        }
+    }
+
+    // Keyboard shortcut: Ctrl+Shift+I
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.ctrlKey && e.shiftKey && e.key === 'I') {
+                e.preventDefault()
+                handleImplement()
+            }
+            // Close context menu on Escape
+            if (e.key === 'Escape') {
+                setContextMenu(prev => ({ ...prev, visible: false }))
+                if (showDiffModal) setShowDiffModal(false)
+            }
+        }
+        window.addEventListener('keydown', handleKeyDown)
+        return () => window.removeEventListener('keydown', handleKeyDown)
+    }, [handleImplement, showDiffModal])
+
+    // Close context menu on click outside
+    useEffect(() => {
+        const handleClick = () => setContextMenu(prev => ({ ...prev, visible: false }))
+        window.addEventListener('click', handleClick)
+        return () => window.removeEventListener('click', handleClick)
+    }, [])
+
+    // Show auto-suggest banner after prompt is saved/edited
+    useEffect(() => {
+        if (page?.promptFilePath && !isEditing) {
+            setShowImplementBanner(true)
+        }
+    }, [page?.rawContent])
+
+    // Context menu handler
+    const handleContextMenu = (e: React.MouseEvent) => {
+        e.preventDefault()
+        setContextMenu({ x: e.clientX, y: e.clientY, visible: true })
     }
 
     const handleSave = async () => {
@@ -396,16 +582,21 @@ export default function PromptDetailPage() {
                 content = textarea.value
             }
 
+            // Use projectId from URL search params, or fall back to page's projectId
+            const effectiveProjectId = projectId || page.projectId || undefined
+
             const saveResult = await apiRequest('/api/save', {
                 method: 'POST',
-                body: { pageId: page.id, content }
+                body: { pageId: page.id, content, projectId: effectiveProjectId }
             })
 
             if (!saveResult.success) {
                 throw new Error(saveResult.error || 'Save failed')
             }
 
-            const seedResult = await apiRequest('/api/seed', { method: 'POST' })
+            // Re-sync the project after save
+            const seedBody = effectiveProjectId ? { projectId: effectiveProjectId } : {}
+            const seedResult = await apiRequest('/api/seed', { method: 'POST', body: seedBody })
             console.log('Seed result:', seedResult)
 
             alert('Saved successfully!')
@@ -655,6 +846,37 @@ export default function PromptDetailPage() {
                         </button>
                         {page.promptFilePath && (
                             <>
+                                {/* Implement Button */}
+                                <button
+                                    className={`topbar-action-btn implement-btn ${isImplementing ? 'implementing' : ''}`}
+                                    onClick={() => handleImplement()}
+                                    disabled={isImplementing || isGenerating}
+                                    title={isImplementing ? implementStatus : 'Implement changes from prompt (Ctrl+Shift+I)'}
+                                >
+                                    {isImplementing ? (
+                                        <>
+                                            <span className="generate-spinner" />
+                                            Implementing...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" strokeLinecap="round" strokeLinejoin="round" />
+                                            </svg>
+                                            🚀 Implement
+                                        </>
+                                    )}
+                                </button>
+                                {lastHistoryId && (
+                                    <button
+                                        className={`topbar-action-btn undo-btn ${isUndoing ? 'undoing' : ''}`}
+                                        onClick={handleUndo}
+                                        disabled={isUndoing}
+                                        title="Undo last implementation"
+                                    >
+                                        {isUndoing ? '↩️ Undoing...' : '↩️ Undo'}
+                                    </button>
+                                )}
                                 <button onClick={downloadFile} className="topbar-action-btn download-btn">
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                         <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" strokeLinecap="round" strokeLinejoin="round" />
@@ -696,6 +918,38 @@ export default function PromptDetailPage() {
                         borderBottom: '1px solid rgba(255,255,255,0.05)',
                     }}>
                         {generateStatus}
+                    </div>
+                )}
+
+                {/* Implement Status Banner */}
+                {implementStatus && (
+                    <div className={`implement-status-banner ${implementStatus.includes('failed') || implementStatus.includes('Failed') ? 'error' :
+                        implementStatus.includes('✅') || implementStatus.includes('applied') ? 'success' :
+                            implementStatus.includes('↩️') || implementStatus.includes('reverted') ? 'info' : 'loading'
+                        }`}>
+                        {implementStatus}
+                    </div>
+                )}
+
+                {/* Auto-suggest Implementation Banner */}
+                {showImplementBanner && page.promptFilePath && !isEditing && !showDiffModal && (
+                    <div className="implement-suggest-banner">
+                        <span>📋 Prompt available. Apply changes to source code?</span>
+                        <div className="implement-suggest-actions">
+                            <button
+                                className="implement-suggest-btn apply"
+                                onClick={() => { setShowImplementBanner(false); handleImplement(); }}
+                                disabled={isImplementing}
+                            >
+                                🚀 Preview & Apply
+                            </button>
+                            <button
+                                className="implement-suggest-btn dismiss"
+                                onClick={() => setShowImplementBanner(false)}
+                            >
+                                Dismiss
+                            </button>
+                        </div>
                     </div>
                 )}
 
@@ -768,7 +1022,7 @@ export default function PromptDetailPage() {
                 </div>
 
                 {/* Content Area */}
-                <div className="prompt-content-area">
+                <div className="prompt-content-area" onContextMenu={handleContextMenu}>
                     {/* Editor Mode */}
                     {isEditing && page.rawContent && (
                         <div className="editor-container">
@@ -1013,6 +1267,111 @@ export default function PromptDetailPage() {
                     )}
                 </div>
             </div >
+
+            {/* Context Menu */}
+            {contextMenu.visible && (
+                <div
+                    className="implement-context-menu"
+                    style={{ top: contextMenu.y, left: contextMenu.x }}
+                >
+                    <button onClick={() => { setContextMenu(prev => ({ ...prev, visible: false })); handleImplement(); }}>
+                        🚀 Implement this prompt
+                    </button>
+                    <button onClick={() => { setContextMenu(prev => ({ ...prev, visible: false })); handleImplement(getNlpContent()); }}>
+                        📝 Implement NLP section
+                    </button>
+                    <button onClick={() => { setContextMenu(prev => ({ ...prev, visible: false })); handleImplement(getDevContent()); }}>
+                        ⚙️ Implement Developer section
+                    </button>
+                </div>
+            )}
+
+            {/* Diff Preview Modal */}
+            {showDiffModal && (
+                <div className="diff-modal-overlay" onClick={() => setShowDiffModal(false)}>
+                    <div className="diff-modal" onClick={e => e.stopPropagation()}>
+                        <div className="diff-modal-header">
+                            <div className="diff-modal-title">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                                Implementation Preview
+                            </div>
+                            <div className="diff-modal-actions">
+                                <button
+                                    className="diff-action-btn reject"
+                                    onClick={() => setShowDiffModal(false)}
+                                >
+                                    ✕ Reject
+                                </button>
+                                <button
+                                    className="diff-action-btn apply"
+                                    onClick={handleApplyChanges}
+                                    disabled={isApplying}
+                                >
+                                    {isApplying ? '⏳ Applying...' : '✅ Apply Changes'}
+                                </button>
+                            </div>
+                        </div>
+
+                        {implementMemory && (
+                            <div className="diff-memory">
+                                <strong>🧠 AI Understanding:</strong> {implementMemory}
+                            </div>
+                        )}
+
+                        {suggestedFiles.length > 0 && (
+                            <div className="diff-suggested">
+                                <strong>📁 Suggested related files:</strong>
+                                {suggestedFiles.map((sf, i) => (
+                                    <div key={i} className="diff-suggested-file">
+                                        <span>{sf.filePath}</span>
+                                        <span className="diff-suggested-reason">{sf.reason}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        <div className="diff-files">
+                            {implementDiffs.map((diff, idx) => (
+                                <div key={idx} className="diff-file-block">
+                                    <div className="diff-file-header">
+                                        <span className={`diff-file-badge ${diff.isNew ? 'new' : 'modified'}`}>
+                                            {diff.isNew ? 'NEW' : 'MODIFIED'}
+                                        </span>
+                                        <span className="diff-file-path">{diff.filePath}</span>
+                                        <span className="diff-file-desc">{diff.description}</span>
+                                    </div>
+                                    <div className="diff-content">
+                                        <div className="diff-side old">
+                                            <div className="diff-side-header">Original</div>
+                                            <pre className="diff-code">
+                                                {diff.oldCode ? diff.oldCode.split('\n').map((line: string, i: number) => (
+                                                    <div key={i} className="diff-line">
+                                                        <span className="diff-line-num">{i + 1}</span>
+                                                        <span className="diff-line-content">{line}</span>
+                                                    </div>
+                                                )) : <div className="diff-empty">New file</div>}
+                                            </pre>
+                                        </div>
+                                        <div className="diff-side new">
+                                            <div className="diff-side-header">Modified</div>
+                                            <pre className="diff-code">
+                                                {diff.newCode.split('\n').map((line: string, i: number) => (
+                                                    <div key={i} className="diff-line">
+                                                        <span className="diff-line-num">{i + 1}</span>
+                                                        <span className="diff-line-content">{line}</span>
+                                                    </div>
+                                                ))}
+                                            </pre>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
         </div >
     )
 }

@@ -51,7 +51,7 @@ async function callInfinitAI({ systemPrompt, userPrompt, config }) {
                 { role: 'user', content: userPrompt }
             ],
             temperature: 0.3,
-            max_tokens: 4096
+            max_tokens: 100000
         })
     });
 

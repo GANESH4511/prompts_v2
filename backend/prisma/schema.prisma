@@ -176,3 +176,17 @@ model Project {
   @@unique([userId, path])
   @@map("projects")
 }
+
+// Implementation history for tracking changes and enabling undo
+model ImplementHistory {
+  id            String   @id @default(cuid())
+  pageId        String
+  projectId     String?
+  promptContent String   // The prompt that was implemented
+  scope         String   @default("single") // "single", "partial", "multi"
+  filesChanged  String   // JSON array of { filePath, backupPath, action }
+  status        String   @default("applied") // "applied", "reverted"
+  createdAt     DateTime @default(now())
+
+  @@map("implement_history")
+}

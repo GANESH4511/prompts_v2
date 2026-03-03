@@ -2,31 +2,9 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { prisma } = require('../lib/prisma');
+const { resolveProjectRoot } = require('../lib/resolveProject');
 
 const router = express.Router();
-
-// Helper to find project root (same logic as seed.js)
-const findProjectRoot = () => {
-    let candidates = [];
-    if (process.env.PROJECT_ROOT) {
-        candidates.push(process.env.PROJECT_ROOT);
-    }
-    candidates.push('C:\\SNIX\\sify\\HrAssist\\exam');
-
-    const relativeRoot = path.resolve(__dirname, '../../../../../');
-    candidates.push(relativeRoot);
-
-    for (const root of candidates) {
-        const checkAppDir = path.join(root, 'app');
-        if (fs.existsSync(checkAppDir)) {
-            return root;
-        }
-    }
-
-    return process.env.PROJECT_ROOT || 'C:\\SNIX\\sify\\HrAssist\\exam';
-};
-
-const PROJECT_ROOT = findProjectRoot();
 
 // GET /api/code/:id - Read source code for a page
 router.get('/:id', async (req, res) => {
@@ -35,15 +13,26 @@ router.get('/:id', async (req, res) => {
 
         const page = await prisma.page.findUnique({
             where: { id },
-            select: { filePath: true, componentName: true }
+            select: { filePath: true, componentName: true, projectId: true }
         });
 
         if (!page) {
             return res.status(404).json({ success: false, error: 'Page not found' });
         }
 
+        // Resolve the project root from DB using the page's project
+        const resolved = await resolveProjectRoot({ projectId: page.projectId, pageId: id });
+        const rootDir = resolved.rootDir;
+
+        if (!rootDir) {
+            return res.status(400).json({
+                success: false,
+                error: 'No project found for this page. Please ensure it belongs to a registered project.'
+            });
+        }
+
         // filePath is stored as relative path like "app/form-completion/{id}/page.js"
-        const absolutePath = path.join(PROJECT_ROOT, page.filePath.split('/').join(path.sep));
+        const absolutePath = path.join(rootDir, page.filePath.split('/').join(path.sep));
 
         if (!fs.existsSync(absolutePath)) {
             return res.status(404).json({
@@ -85,14 +74,25 @@ router.post('/:id', async (req, res) => {
 
         const page = await prisma.page.findUnique({
             where: { id },
-            select: { filePath: true }
+            select: { filePath: true, projectId: true }
         });
 
         if (!page) {
             return res.status(404).json({ success: false, error: 'Page not found' });
         }
 
-        const absolutePath = path.join(PROJECT_ROOT, page.filePath.split('/').join(path.sep));
+        // Resolve the project root from DB using the page's project
+        const resolved = await resolveProjectRoot({ projectId: page.projectId, pageId: id });
+        const rootDir = resolved.rootDir;
+
+        if (!rootDir) {
+            return res.status(400).json({
+                success: false,
+                error: 'No project found for this page. Please ensure it belongs to a registered project.'
+            });
+        }
+
+        const absolutePath = path.join(rootDir, page.filePath.split('/').join(path.sep));
 
         if (!fs.existsSync(absolutePath)) {
             return res.status(404).json({

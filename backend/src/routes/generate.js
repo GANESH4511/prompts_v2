@@ -24,31 +24,9 @@ const path = require('path');
 const crypto = require('crypto');
 const { generatePrompt, loadTemplate, getLatestVersion } = require('../llm');
 const { prisma } = require('../lib/prisma');
+const { resolveProjectRoot } = require('../lib/resolveProject');
 
 const router = express.Router();
-
-// Helper to find project root (same logic as seed.js)
-const findProjectRoot = () => {
-    let candidates = [];
-    if (process.env.PROJECT_ROOT) {
-        candidates.push(process.env.PROJECT_ROOT);
-    }
-    candidates.push('C:\\SNIX\\sify\\HrAssist\\exam');
-
-    const relativeRoot = path.resolve(__dirname, '../../../../../');
-    candidates.push(relativeRoot);
-
-    for (const root of candidates) {
-        const checkAppDir = path.join(root, 'app');
-        if (fs.existsSync(checkAppDir)) {
-            return root;
-        }
-    }
-
-    return process.env.PROJECT_ROOT || 'C:\\SNIX\\sify\\HrAssist\\exam';
-};
-
-const PROJECT_ROOT = findProjectRoot();
 
 /**
  * Combine NLP and Developer output into a single .txt file
@@ -134,14 +112,18 @@ router.post('/', async (req, res) => {
         console.log(`  📄 File: ${filePath}`);
 
         // --- Step 1: Resolve project root dynamically from DB ---
-        let resolvedRoot = PROJECT_ROOT;
-        if (projectId) {
-            const project = await prisma.project.findUnique({ where: { id: projectId } });
-            if (project && project.path) {
-                resolvedRoot = project.path.replace(/\//g, path.sep);
-                console.log(`  📁 Resolved project root from DB: ${resolvedRoot}`);
-            }
+        const resolved = await resolveProjectRoot({ projectId, filePath });
+        const resolvedRoot = resolved.rootDir;
+        const effectiveProjectId = resolved.projectId || projectId;
+
+        if (!resolvedRoot) {
+            return res.status(400).json({
+                success: false,
+                error: `No project found for file: ${filePath}. Please ensure the file belongs to a registered project.`
+            });
         }
+
+        console.log(`  📁 Resolved project root: ${resolvedRoot}`);
 
         let absoluteSourcePath;
 
@@ -243,7 +225,7 @@ router.post('/', async (req, res) => {
         console.log(`  📊 Output: ${promptContent.length} chars, hash=${outputHash}`);
 
         // --- Step 9: Trigger existing /api/seed to sync database ---
-        const seedResult = await triggerSeed(projectId);
+        const seedResult = await triggerSeed(effectiveProjectId);
 
         // --- Step 10: Respond ---
         const elapsed = Date.now() - startTime;
@@ -270,15 +252,11 @@ router.post('/', async (req, res) => {
         const elapsed = Date.now() - startTime;
         console.error(`  ❌ Generate failed (${elapsed}ms):`, error.message);
 
-        // Clean up temp file if it exists
+        // Clean up temp file if it exists (best-effort)
         try {
             const { filePath } = req.body || {};
-            if (filePath) {
-                const sourceDir = path.dirname(
-                    path.isAbsolute(filePath)
-                        ? filePath
-                        : path.join(PROJECT_ROOT, filePath.split('/').join(path.sep))
-                );
+            if (filePath && path.isAbsolute(filePath)) {
+                const sourceDir = path.dirname(filePath);
                 const baseName = path.basename(filePath, path.extname(filePath));
                 const tmpPath = path.join(sourceDir, `${baseName}.txt.tmp`);
                 if (fs.existsSync(tmpPath)) {

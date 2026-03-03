@@ -3,33 +3,9 @@ const fs = require('fs');
 const path = require('path');
 const { prisma } = require('../lib/prisma');
 const { classifyFiles } = require('../llm/classifier');
+const { resolveProjectRoot } = require('../lib/resolveProject');
 
 const router = express.Router();
-
-// Helper to find project root (fallback for non-project-scoped calls)
-const findProjectRoot = () => {
-    let candidates = [];
-    if (process.env.PROJECT_ROOT) {
-        candidates.push(process.env.PROJECT_ROOT);
-    }
-
-    candidates.push('C:\\SNIX\\sify\\HrAssist\\exam');
-
-    const relativeRoot = path.resolve(__dirname, '../../../../../');
-    candidates.push(relativeRoot);
-
-    for (const root of candidates) {
-        const checkAppDir = path.join(root, 'app');
-        if (fs.existsSync(checkAppDir)) {
-            console.log(`Found valid project root at: ${root}`);
-            return root;
-        }
-    }
-
-    return process.env.PROJECT_ROOT || 'C:\\SNIX\\sify\\HrAssist\\exam';
-};
-
-const PROJECT_ROOT = findProjectRoot();
 
 // Directories to skip while scanning
 const SKIP_DIRS = new Set([
@@ -643,20 +619,21 @@ router.post('/', async (req, res) => {
     try {
         const { projectId } = req.body || {};
 
-        // Determine root directory
-        let rootDir = PROJECT_ROOT;
-
-        if (projectId) {
-            const project = await prisma.project.findUnique({
-                where: { id: projectId }
+        if (!projectId) {
+            return res.status(400).json({
+                error: 'projectId is required. Please select a project first.'
             });
-            if (!project) {
-                return res.status(404).json({ error: 'Project not found' });
-            }
-            rootDir = project.path.replace(/\//g, path.sep);
         }
 
-        const result = await seedProject(rootDir, projectId || null);
+        // Determine root directory from DB
+        const resolved = await resolveProjectRoot({ projectId });
+        const rootDir = resolved.rootDir;
+
+        if (!rootDir) {
+            return res.status(404).json({ error: 'Project not found or has no path configured.' });
+        }
+
+        const result = await seedProject(rootDir, projectId);
         res.json(result);
     } catch (error) {
         console.error('Seed error:', error);
@@ -672,22 +649,26 @@ router.get('/check-sync', async (req, res) => {
     try {
         const { projectId } = req.query;
 
-        // Determine root directory
-        let rootDir = PROJECT_ROOT;
-
-        if (projectId) {
-            const project = await prisma.project.findUnique({
-                where: { id: projectId }
+        if (!projectId) {
+            return res.json({
+                success: true,
+                inSync: true,
+                message: 'No project specified',
+                details: { newFiles: [], removedFiles: [], modifiedFiles: [] }
             });
-            if (!project) {
-                return res.json({
-                    success: true,
-                    inSync: false,
-                    message: 'Project not found',
-                    details: { newFiles: [], removedFiles: [], modifiedFiles: [] }
-                });
-            }
-            rootDir = project.path.replace(/\//g, path.sep);
+        }
+
+        // Determine root directory from DB
+        const resolved = await resolveProjectRoot({ projectId });
+        const rootDir = resolved.rootDir;
+
+        if (!rootDir) {
+            return res.json({
+                success: true,
+                inSync: false,
+                message: 'Project not found',
+                details: { newFiles: [], removedFiles: [], modifiedFiles: [] }
+            });
         }
 
         if (!fs.existsSync(rootDir)) {
