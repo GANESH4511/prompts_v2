@@ -2,7 +2,8 @@
 
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { useTheme } from "@/components/ThemeProvider";
-import { ThemeToggle } from "@/components/ThemeToggle";
+import { ProfilePanel } from "@/components/ProfilePanel";
+import { getStoredUser, clearAuthData } from "@/lib/api";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
@@ -35,6 +36,8 @@ export default function ChatsPage() {
     const [input, setInput] = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [sidebarOpen, setSidebarOpen] = useState(true);
+    const [user, setUser] = useState<any>(null);
+    const [showProfile, setShowProfile] = useState(false);
 
     // Refs
     const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -76,6 +79,9 @@ export default function ChatsPage() {
         if (sessions.length === 0) {
             createNewSession();
         }
+        // Load user from localStorage
+        const storedUser = getStoredUser();
+        if (storedUser) setUser(storedUser);
     }, []);
 
     // Delete session
@@ -394,7 +400,22 @@ export default function ChatsPage() {
                         <span className="chat-model-label">Llama 3.2 11B Vision</span>
                     </div>
                     <div className="chat-header-actions">
-                        <ThemeToggle />
+                        <button
+                            onClick={() => setShowProfile(true)}
+                            id="profile-btn"
+                            style={{
+                                width: 32, height: 32, borderRadius: 8,
+                                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                fontSize: 11, fontWeight: 700, color: '#fff',
+                                border: 'none', cursor: 'pointer',
+                                boxShadow: '0 2px 6px rgba(99, 102, 241, 0.3)',
+                                transition: 'all 0.2s ease', flexShrink: 0,
+                            }}
+                            title="Profile & Settings"
+                        >
+                            {user?.name?.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2) || '?'}
+                        </button>
                     </div>
                 </header>
 
@@ -536,6 +557,16 @@ export default function ChatsPage() {
                     </p>
                 </div>
             </main>
+
+            {/* Profile Panel */}
+            {user && (
+                <ProfilePanel
+                    user={user}
+                    isOpen={showProfile}
+                    onClose={() => setShowProfile(false)}
+                    onLogout={() => { clearAuthData(); window.location.href = '/login'; }}
+                />
+            )}
         </div>
     );
 }

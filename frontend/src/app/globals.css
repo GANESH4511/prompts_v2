@@ -513,6 +513,22 @@ html:not(.dark) [class*="from-indigo-400"][class*="via-purple-400"][class*="to-p
     }
 }
 
+@keyframes slideInRight {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+.profile-panel-slide {
+    animation: slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
 /* Responsive utilities */
 @layer utilities {
     .text-responsive {
@@ -3758,6 +3774,185 @@ html.dark .ide-sidebar {
     color: #9ca3af !important;
 }
 
+/* ===== PINNED FILES SECTION ===== */
+.pinned-section {
+    margin-bottom: 12px;
+    border-bottom: 1px solid #e5e7eb;
+    padding-bottom: 8px;
+}
+
+html.dark .pinned-section {
+    border-bottom-color: #313244;
+}
+
+.pinned-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 4px;
+    margin-bottom: 6px;
+}
+
+.pinned-section-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: #f59e0b;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.pinned-section-title svg {
+    width: 12px;
+    height: 12px;
+    fill: #f59e0b;
+}
+
+.pinned-file-row {
+    display: flex;
+    align-items: center;
+    height: 30px;
+    padding: 0 8px 0 12px;
+    cursor: pointer;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #374151;
+    margin-bottom: 1px;
+    transition: all 0.15s ease;
+    user-select: none;
+    position: relative;
+    white-space: nowrap;
+    background: rgba(245, 158, 11, 0.04);
+    border: 1px solid transparent;
+}
+
+.pinned-file-row:hover {
+    background: rgba(245, 158, 11, 0.1);
+    border-color: rgba(245, 158, 11, 0.15);
+}
+
+.pinned-file-row.selected {
+    background: #eff6ff !important;
+    border-color: rgba(59, 130, 246, 0.2);
+    color: #3b82f6 !important;
+    font-weight: 500;
+}
+
+html.dark .pinned-file-row {
+    color: #a6adc8;
+    background: rgba(245, 158, 11, 0.04);
+}
+
+html.dark .pinned-file-row:hover {
+    background: rgba(245, 158, 11, 0.1);
+    border-color: rgba(245, 158, 11, 0.15);
+}
+
+html.dark .pinned-file-row.selected {
+    background: rgba(137, 180, 250, 0.15) !important;
+    color: #89b4fa !important;
+}
+
+.pinned-file-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-left: 6px;
+    font-weight: 500;
+}
+
+.pinned-file-path {
+    font-size: 10px;
+    color: #9ca3af;
+    margin-left: 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100px;
+}
+
+html.dark .pinned-file-path {
+    color: #585b70;
+}
+
+.pinned-unpin-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border: none;
+    background: transparent;
+    color: #9ca3af;
+    cursor: pointer;
+    border-radius: 4px;
+    opacity: 0;
+    transition: all 0.15s ease;
+    margin-left: auto;
+    flex-shrink: 0;
+    padding: 0;
+}
+
+.pinned-file-row:hover .pinned-unpin-btn {
+    opacity: 1;
+}
+
+.pinned-unpin-btn:hover {
+    background: rgba(239, 68, 68, 0.12);
+    color: #ef4444;
+}
+
+.pinned-empty-hint {
+    font-size: 11px;
+    color: #9ca3af;
+    font-style: italic;
+    padding: 4px 12px;
+    text-align: center;
+}
+
+html.dark .pinned-empty-hint {
+    color: #585b70;
+}
+
+/* Pin Button on tree file rows */
+.tree-pin-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    border-radius: 4px;
+    opacity: 0;
+    transition: all 0.15s ease;
+    margin-left: 4px;
+    flex-shrink: 0;
+    padding: 0;
+    color: #9ca3af;
+}
+
+.tree-node-row:hover .tree-pin-btn {
+    opacity: 1;
+}
+
+.tree-pin-btn:hover {
+    background: rgba(245, 158, 11, 0.12);
+    color: #f59e0b;
+}
+
+.tree-pin-btn.pinned {
+    opacity: 1;
+    color: #f59e0b;
+}
+
+.tree-pin-btn.pinned:hover {
+    background: rgba(239, 68, 68, 0.12);
+    color: #ef4444;
+}
+
 /* Tree Container */
 .tree-view-container {
     display: flex;
@@ -5124,8 +5319,15 @@ html.dark .undo-btn {
 }
 
 @keyframes slideDown {
-    from { transform: translateY(-100%); opacity: 0; }
-    to { transform: translateY(0); opacity: 1; }
+    from {
+        transform: translateY(-100%);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
 }
 
 html.dark .implement-suggest-banner {
@@ -5194,8 +5396,15 @@ html.dark .implement-suggest-btn.dismiss:hover {
 }
 
 @keyframes contextMenuIn {
-    from { transform: scale(0.95); opacity: 0; }
-    to { transform: scale(1); opacity: 1; }
+    from {
+        transform: scale(0.95);
+        opacity: 0;
+    }
+
+    to {
+        transform: scale(1);
+        opacity: 1;
+    }
 }
 
 html.dark .implement-context-menu {
@@ -5249,8 +5458,13 @@ html.dark .implement-context-menu button:hover {
 }
 
 @keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
 }
 
 .diff-modal {
@@ -5267,8 +5481,15 @@ html.dark .implement-context-menu button:hover {
 }
 
 @keyframes modalIn {
-    from { transform: scale(0.95) translateY(20px); opacity: 0; }
-    to { transform: scale(1) translateY(0); opacity: 1; }
+    from {
+        transform: scale(0.95) translateY(20px);
+        opacity: 0;
+    }
+
+    to {
+        transform: scale(1) translateY(0);
+        opacity: 1;
+    }
 }
 
 html.dark .diff-modal {

@@ -2,13 +2,15 @@
 
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { useDashboardMode } from '@/contexts/DashboardModeContext'
 
 export default function RootPage() {
     const router = useRouter()
+    const { getDashboardRoute } = useDashboardMode()
 
     useEffect(() => {
-        router.replace('/new-dashboard')
-    }, [router])
+        router.replace(getDashboardRoute())
+    }, [router, getDashboardRoute])
 
     return (
         <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-[#0a0a1a]">
@@ -19,3 +21,4 @@ export default function RootPage() {
         </div>
     )
 }
+

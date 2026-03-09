@@ -2,9 +2,10 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { apiRequest, getAccessToken, clearAuthData } from '@/lib/api'
-import { ThemeToggle } from '@/components/ThemeToggle'
+import { apiRequest, getAccessToken, getStoredUser, clearAuthData } from '@/lib/api'
+import { ProfilePanel } from '@/components/ProfilePanel'
 import { useTheme } from '@/components/ThemeProvider'
+import { useDashboardMode } from '@/contexts/DashboardModeContext'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
 
@@ -194,6 +195,7 @@ function buildSemanticTree(pages: Page[]): TreeGroup[] {
 export default function NewDashboard() {
     const router = useRouter()
     const { theme } = useTheme()
+    const { mode } = useDashboardMode()
     const isDark = theme === 'dark'
 
     // Theme-aware color tokens - Stitch Palette in light mode
@@ -223,6 +225,8 @@ export default function NewDashboard() {
 
     const [pages, setPages] = useState<Page[]>([])
     const [project, setProject] = useState<Project | null>(null)
+    const [user, setUser] = useState<any>(null)
+    const [showProfile, setShowProfile] = useState(false)
     const [selectedPage, setSelectedPage] = useState<Page | null>(null)
     const [loading, setLoading] = useState(true)
     const [syncing, setSyncing] = useState(false)
@@ -241,6 +245,18 @@ export default function NewDashboard() {
     // Per-prompt inline editing
     const [editingPromptId, setEditingPromptId] = useState<string | null>(null)
     const [editedPromptContent, setEditedPromptContent] = useState('')
+
+    // Implement feature states
+    const [isImplementing, setIsImplementing] = useState(false)
+    const [implementStatus, setImplementStatus] = useState<string>('')
+    const [showDiffModal, setShowDiffModal] = useState(false)
+    const [implementDiffs, setImplementDiffs] = useState<any[]>([])
+    const [implementSessionId, setImplementSessionId] = useState<string>('')
+    const [implementMemory, setImplementMemory] = useState<string>('')
+    const [suggestedFiles, setSuggestedFiles] = useState<any[]>([])
+    const [lastHistoryId, setLastHistoryId] = useState<string | null>(null)
+    const [isApplying, setIsApplying] = useState(false)
+    const [isUndoing, setIsUndoing] = useState(false)
 
     const isResizing = useRef(false)
     const editorRef = useRef<HTMLTextAreaElement>(null)
@@ -277,9 +293,10 @@ export default function NewDashboard() {
             const token = getAccessToken()
             if (!token) { router.push('/login'); return }
             const userStr = typeof window !== 'undefined' ? localStorage.getItem('user') : null
-            const user = userStr ? JSON.parse(userStr) : null
-            if (!user) { router.push('/login'); return }
-            const projectsRes = await apiRequest(`/api/projects/user/${user.id}`)
+            const storedUser = userStr ? JSON.parse(userStr) : null
+            if (!storedUser) { router.push('/login'); return }
+            setUser(storedUser)
+            const projectsRes = await apiRequest(`/api/projects/user/${storedUser.id}`)
             if (projectsRes.success && projectsRes.data?.projects) {
                 const active = projectsRes.data.projects.find((p: Project) => p.isActive)
                 if (active) { setProject(active); await loadPages(active.id) }
@@ -401,6 +418,115 @@ export default function NewDashboard() {
 
     const handleLogout = () => { clearAuthData(); router.push('/login') }
 
+    // --- Implement ---
+    const handleImplement = async () => {
+        if (!selectedPage?.rawContent || isImplementing) return
+        setIsImplementing(true)
+        setImplementStatus('Analyzing prompt and generating code changes...')
+
+        try {
+            const res = await fetch(`${API_URL}/api/implement`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    pageId: selectedPage.id,
+                    promptContent: selectedPage.rawContent,
+                    scope: 'single'
+                })
+            })
+            const data = await res.json()
+
+            if (data.success) {
+                setImplementDiffs(data.diffs || [])
+                setImplementSessionId(data.sessionId)
+                setImplementMemory(data.memory || '')
+                setSuggestedFiles(data.suggestedFiles || [])
+                setShowDiffModal(true)
+                setImplementStatus(`Preview ready (${data.elapsed})`)
+            } else {
+                setImplementStatus(`Failed: ${data.error}`)
+                setTimeout(() => setImplementStatus(''), 8000)
+            }
+        } catch (err) {
+            setImplementStatus('Failed: Network error')
+            setTimeout(() => setImplementStatus(''), 8000)
+        } finally {
+            setIsImplementing(false)
+        }
+    }
+
+    const handleApplyChanges = async () => {
+        if (!implementSessionId || isApplying) return
+        setIsApplying(true)
+        setImplementStatus('Applying changes...')
+
+        try {
+            const res = await fetch(`${API_URL}/api/implement/apply`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionId: implementSessionId, selectedDiffs: implementDiffs })
+            })
+            const data = await res.json()
+
+            if (data.success) {
+                setLastHistoryId(data.historyId)
+                setShowDiffModal(false)
+                setImplementStatus(`\u2705 Applied (${data.filesChanged} file(s)) — ${data.elapsed}`)
+                setTimeout(() => setImplementStatus(''), 10000)
+            } else {
+                setImplementStatus(`Apply failed: ${data.error}`)
+                setTimeout(() => setImplementStatus(''), 8000)
+            }
+        } catch (err) {
+            setImplementStatus('Apply failed: Network error')
+            setTimeout(() => setImplementStatus(''), 8000)
+        } finally {
+            setIsApplying(false)
+        }
+    }
+
+    const handleUndo = async () => {
+        if (!lastHistoryId || isUndoing) return
+        setIsUndoing(true)
+        setImplementStatus('Reverting...')
+
+        try {
+            const res = await fetch(`${API_URL}/api/implement/undo`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ historyId: lastHistoryId })
+            })
+            const data = await res.json()
+
+            if (data.success) {
+                setLastHistoryId(null)
+                setImplementStatus(`\u21a9\ufe0f Reverted (${data.restoredFiles} file(s))`)
+                setTimeout(() => setImplementStatus(''), 8000)
+            } else {
+                setImplementStatus(`Undo failed: ${data.error}`)
+                setTimeout(() => setImplementStatus(''), 8000)
+            }
+        } catch (err) {
+            setImplementStatus('Undo failed: Network error')
+            setTimeout(() => setImplementStatus(''), 8000)
+        } finally {
+            setIsUndoing(false)
+        }
+    }
+
+    // Keyboard shortcut for implement
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.ctrlKey && e.shiftKey && e.key === 'I') {
+                e.preventDefault()
+                handleImplement()
+            }
+            if (e.key === 'Escape' && showDiffModal) setShowDiffModal(false)
+        }
+        window.addEventListener('keydown', handleKeyDown)
+        return () => window.removeEventListener('keydown', handleKeyDown)
+    }, [showDiffModal, isImplementing, selectedPage])
+
     // --- Loading ---
     if (loading) {
         return (
@@ -425,16 +551,18 @@ export default function NewDashboard() {
                 <div style={{ width: 1, height: 20, background: colors.borderStrong }} />
                 <h1 style={{ fontSize: 14, fontWeight: 600, color: colors.textPrimary, margin: 0 }}>{project?.name || 'No Project'}</h1>
                 <div style={{ flex: 1 }} />
-                <button
-                    onClick={() => router.push('/dev-dashboard')}
-                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600, border: `1px solid ${colors.borderStrong}`, background: isDark ? '#1e1b4b' : '#f5f3ff', color: isDark ? '#c4b5fd' : '#5b21b6', cursor: 'pointer' }}
-                    title="Developer Dashboard"
-                >
-                    <svg style={{ width: 14, height: 14 }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-                    </svg>
-                    Developer
-                </button>
+                {mode !== 'nlp' && (
+                    <button
+                        onClick={() => router.push('/dev-dashboard')}
+                        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600, border: `1px solid ${colors.borderStrong}`, background: isDark ? '#1e1b4b' : '#f5f3ff', color: isDark ? '#c4b5fd' : '#5b21b6', cursor: 'pointer' }}
+                        title="Developer Dashboard"
+                    >
+                        <svg style={{ width: 14, height: 14 }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                        </svg>
+                        Developer
+                    </button>
+                )}
                 <button
                     onClick={handleSync}
                     disabled={syncing}
@@ -445,9 +573,21 @@ export default function NewDashboard() {
                     </svg>
                     {syncing ? 'Syncing...' : 'Sync'}
                 </button>
-                <ThemeToggle />
-                <button onClick={handleLogout} style={{ background: 'none', border: 'none', cursor: 'pointer', color: colors.textMuted, padding: 0 }} title="Logout">
-                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+                <button
+                    onClick={() => setShowProfile(true)}
+                    id="profile-btn"
+                    style={{
+                        width: 32, height: 32, borderRadius: 8,
+                        background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 11, fontWeight: 700, color: '#fff',
+                        border: 'none', cursor: 'pointer',
+                        boxShadow: '0 2px 6px rgba(99, 102, 241, 0.3)',
+                        transition: 'all 0.2s ease', flexShrink: 0,
+                    }}
+                    title="Profile & Settings"
+                >
+                    {user?.name?.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2) || '?'}
                 </button>
             </header>
 
@@ -910,7 +1050,92 @@ export default function NewDashboard() {
                                     </svg>
                                     {syncing ? 'Generating...' : (selectedPage?.promptFilePath ? '✨ Re-generate' : '✨ Generate')}
                                 </button>
+                                {/* Implement Button */}
+                                {selectedPage?.rawContent && (
+                                    <>
+                                        <button
+                                            onClick={handleImplement}
+                                            disabled={isImplementing}
+                                            style={{
+                                                display: 'flex', alignItems: 'center', gap: 6,
+                                                padding: '5px 14px', borderRadius: 20, fontSize: 12, fontWeight: 600,
+                                                cursor: isImplementing ? 'wait' : 'pointer',
+                                                border: `1.5px solid ${isDark ? '#22c55e' : '#16a34a'}`,
+                                                background: isDark ? '#14532d' : '#f0fdf4',
+                                                color: isDark ? '#86efac' : '#15803d',
+                                                transition: 'all 0.15s ease',
+                                                outline: 'none',
+                                                opacity: isImplementing ? 0.7 : 1,
+                                            }}
+                                            title="Apply prompt changes to source code (Ctrl+Shift+I)"
+                                        >
+                                            {isImplementing ? (
+                                                <>
+                                                    <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ animation: 'spin 1s linear infinite' }}>
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                                    </svg>
+                                                    Implementing...
+                                                </>
+                                            ) : (
+                                                '🚀 Implement'
+                                            )}
+                                        </button>
+                                        {lastHistoryId && (
+                                            <button
+                                                onClick={handleUndo}
+                                                disabled={isUndoing}
+                                                style={{
+                                                    display: 'flex', alignItems: 'center', gap: 6,
+                                                    padding: '5px 14px', borderRadius: 20, fontSize: 12, fontWeight: 600,
+                                                    cursor: isUndoing ? 'wait' : 'pointer',
+                                                    border: `1.5px solid ${isDark ? '#f97316' : '#ea580c'}`,
+                                                    background: isDark ? '#431407' : '#fff7ed',
+                                                    color: isDark ? '#fdba74' : '#c2410c',
+                                                    transition: 'all 0.15s ease',
+                                                    outline: 'none',
+                                                }}
+                                                title="Undo last applied changes"
+                                            >
+                                                {isUndoing ? '↩️ Undoing...' : '↩️ Undo'}
+                                            </button>
+                                        )}
+                                    </>
+                                )}
                             </div>
+
+                            {/* Implement Status Banner */}
+                            {implementStatus && (
+                                <div style={{
+                                    flexShrink: 0,
+                                    padding: '8px 16px',
+                                    fontSize: 12,
+                                    fontWeight: 600,
+                                    textAlign: 'center',
+                                    borderBottom: `1px solid ${colors.border}`,
+                                    background: implementStatus.includes('failed') || implementStatus.includes('Failed')
+                                        ? (isDark ? '#450a0a' : '#fef2f2')
+                                        : implementStatus.includes('\u2705') || implementStatus.includes('Applied')
+                                            ? (isDark ? '#022c22' : '#f0fdf4')
+                                            : implementStatus.includes('\u21a9\ufe0f') || implementStatus.includes('Reverted')
+                                                ? (isDark ? '#1e1b4b' : '#eef2ff')
+                                                : (isDark ? '#1e293b' : '#f8fafc'),
+                                    color: implementStatus.includes('failed') || implementStatus.includes('Failed')
+                                        ? (isDark ? '#fca5a5' : '#dc2626')
+                                        : implementStatus.includes('\u2705') || implementStatus.includes('Applied')
+                                            ? (isDark ? '#86efac' : '#16a34a')
+                                            : implementStatus.includes('\u21a9\ufe0f') || implementStatus.includes('Reverted')
+                                                ? (isDark ? '#a5b4fc' : '#4f46e5')
+                                                : (isDark ? '#94a3b8' : '#475569'),
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                                }}>
+                                    {!implementStatus.includes('\u2705') && !implementStatus.includes('failed') && !implementStatus.includes('Failed') && !implementStatus.includes('\u21a9\ufe0f') && (
+                                        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ animation: 'spin 1s linear infinite' }}>
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                        </svg>
+                                    )}
+                                    {implementStatus}
+                                </div>
+                            )}
 
                             {/* Content */}
                             <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
@@ -1169,6 +1394,79 @@ export default function NewDashboard() {
                 </main>
             </div>
 
+            {/* Diff Preview Modal */}
+            {showDiffModal && (
+                <div className="diff-modal-overlay" onClick={() => setShowDiffModal(false)}>
+                    <div className="diff-modal" onClick={e => e.stopPropagation()}>
+                        <div className="diff-modal-header">
+                            <div className="diff-modal-title">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                                Implementation Preview
+                            </div>
+                            <div className="diff-modal-actions">
+                                <button className="diff-action-btn reject" onClick={() => setShowDiffModal(false)}>✕ Reject</button>
+                                <button className="diff-action-btn apply" onClick={handleApplyChanges} disabled={isApplying}>
+                                    {isApplying ? '⏳ Applying...' : '✅ Apply Changes'}
+                                </button>
+                            </div>
+                        </div>
+                        {implementMemory && (
+                            <div className="diff-memory"><strong>🧠 AI Understanding:</strong> {implementMemory}</div>
+                        )}
+                        {suggestedFiles.length > 0 && (
+                            <div className="diff-suggested">
+                                <strong>📁 Suggested related files:</strong>
+                                {suggestedFiles.map((sf: any, i: number) => (
+                                    <div key={i} className="diff-suggested-file">
+                                        <span>{sf.filePath}</span>
+                                        <span className="diff-suggested-reason">{sf.reason}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        <div className="diff-files">
+                            {implementDiffs.map((diff: any, idx: number) => (
+                                <div key={idx} className="diff-file-block">
+                                    <div className="diff-file-header">
+                                        <span className={`diff-file-badge ${diff.isNew ? 'new' : 'modified'}`}>
+                                            {diff.isNew ? 'NEW' : 'MODIFIED'}
+                                        </span>
+                                        <span className="diff-file-path">{diff.filePath}</span>
+                                        <span className="diff-file-desc">{diff.description}</span>
+                                    </div>
+                                    <div className="diff-content">
+                                        <div className="diff-side old">
+                                            <div className="diff-side-header">Original</div>
+                                            <pre className="diff-code">
+                                                {diff.oldCode ? diff.oldCode.split('\n').map((line: string, i: number) => (
+                                                    <div key={i} className="diff-line">
+                                                        <span className="diff-line-num">{i + 1}</span>
+                                                        <span className="diff-line-content">{line}</span>
+                                                    </div>
+                                                )) : <div className="diff-empty">New file</div>}
+                                            </pre>
+                                        </div>
+                                        <div className="diff-side new">
+                                            <div className="diff-side-header">Modified</div>
+                                            <pre className="diff-code">
+                                                {diff.newCode.split('\n').map((line: string, i: number) => (
+                                                    <div key={i} className="diff-line">
+                                                        <span className="diff-line-num">{i + 1}</span>
+                                                        <span className="diff-line-content">{line}</span>
+                                                    </div>
+                                                ))}
+                                            </pre>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <style jsx global>{`
                 @keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
                 aside::-webkit-scrollbar, aside *::-webkit-scrollbar { width: 6px; }
@@ -1180,6 +1478,15 @@ export default function NewDashboard() {
                 main > div::-webkit-scrollbar-thumb { background: #475569; border-radius: 10px; }
                 main > div::-webkit-scrollbar-thumb:hover { background: #64748b; }
             `}</style>
+            {/* Profile Panel */}
+            {user && (
+                <ProfilePanel
+                    user={user}
+                    isOpen={showProfile}
+                    onClose={() => setShowProfile(false)}
+                    onLogout={handleLogout}
+                />
+            )}
         </div>
     )
 }

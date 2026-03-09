@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiRequest, getAccessToken, clearAuthData } from '@/lib/api'
-import { ThemeToggle } from '@/components/ThemeToggle'
+import { ProfilePanel } from '@/components/ProfilePanel'
+import { useDashboardMode } from '@/contexts/DashboardModeContext'
 
 // API Base URL from environment variable
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
@@ -356,7 +357,7 @@ const FileIcon = ({ filePath }: { filePath: string }) => {
     )
 }
 
-const FileTreeNode = ({ node, depth, expandedNodes, onToggleNode, onNavigateToFile, onGenerate, generatingFile, searchQuery, selectedPageId }: {
+const FileTreeNode = ({ node, depth, expandedNodes, onToggleNode, onNavigateToFile, onGenerate, generatingFile, searchQuery, selectedPageId, pinnedFiles, onTogglePin }: {
     node: TreeNode
     depth: number
     expandedNodes: Set<string>
@@ -366,6 +367,8 @@ const FileTreeNode = ({ node, depth, expandedNodes, onToggleNode, onNavigateToFi
     generatingFile: string | null
     searchQuery: string
     selectedPageId: string | null
+    pinnedFiles: Set<string>
+    onTogglePin: (pageId: string) => void
 }) => {
     const isExpanded = expandedNodes.has(node.fullPath) || !!searchQuery
     const hasChildren = node.children.length > 0
@@ -410,10 +413,12 @@ const FileTreeNode = ({ node, depth, expandedNodes, onToggleNode, onNavigateToFi
                     {sortedChildren.map(child => (
                         <FileTreeNode key={child.fullPath} node={child} depth={depth + 1} expandedNodes={expandedNodes}
                             onToggleNode={onToggleNode} onNavigateToFile={onNavigateToFile}
-                            onGenerate={onGenerate} generatingFile={generatingFile} searchQuery={searchQuery} selectedPageId={selectedPageId} />
+                            onGenerate={onGenerate} generatingFile={generatingFile} searchQuery={searchQuery} selectedPageId={selectedPageId}
+                            pinnedFiles={pinnedFiles} onTogglePin={onTogglePin} />
                     ))}
                     {sortedPages.map(page => {
                         const hasPrompt = page.promptFilePath || page.sections.length > 0
+                        const isPinned = pinnedFiles.has(page.id)
                         return (
                             <div key={page.id}
                                 className={`tree-node-row ${selectedPageId === page.id ? 'selected' : ''}`}
@@ -424,6 +429,15 @@ const FileTreeNode = ({ node, depth, expandedNodes, onToggleNode, onNavigateToFi
                                 <FileIcon filePath={page.filePath} />
                                 <span className="tree-label file">{page.componentName}</span>
                                 <span className={`tree-dot ${hasPrompt ? 'tracked' : 'modified'}`} />
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); onTogglePin(page.id) }}
+                                    className={`tree-pin-btn ${isPinned ? 'pinned' : ''}`}
+                                    title={isPinned ? 'Unpin file' : 'Pin to top'}
+                                >
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill={isPinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" />
+                                    </svg>
+                                </button>
                                 {!hasPrompt && (
                                     <button onClick={(e) => { e.stopPropagation(); onGenerate(page.filePath) }}
                                         disabled={generatingFile === page.filePath}
@@ -440,7 +454,7 @@ const FileTreeNode = ({ node, depth, expandedNodes, onToggleNode, onNavigateToFi
     )
 }
 
-const TreeViewComponent = ({ tree, expandedNodes, onToggleNode, onExpandAll, onCollapseAll, onNavigateToFile, onGenerate, generatingFile, searchQuery, selectedPageId }: {
+const TreeViewComponent = ({ tree, expandedNodes, onToggleNode, onExpandAll, onCollapseAll, onNavigateToFile, onGenerate, generatingFile, searchQuery, selectedPageId, pinnedFiles, onTogglePin }: {
     tree: TreeNode[]
     expandedNodes: Set<string>
     onToggleNode: (path: string) => void
@@ -451,6 +465,8 @@ const TreeViewComponent = ({ tree, expandedNodes, onToggleNode, onExpandAll, onC
     generatingFile: string | null
     searchQuery: string
     selectedPageId: string | null
+    pinnedFiles: Set<string>
+    onTogglePin: (pageId: string) => void
 }) => {
     // Manually handle Root node state for the visual wrapper
     const [rootExpanded, setRootExpanded] = useState(true)
@@ -492,7 +508,8 @@ const TreeViewComponent = ({ tree, expandedNodes, onToggleNode, onExpandAll, onC
                         {tree.map(node => (
                             <FileTreeNode key={node.fullPath} node={node} depth={1} expandedNodes={expandedNodes}
                                 onToggleNode={onToggleNode} onNavigateToFile={onNavigateToFile}
-                                onGenerate={onGenerate} generatingFile={generatingFile} searchQuery={searchQuery} selectedPageId={selectedPageId} />
+                                onGenerate={onGenerate} generatingFile={generatingFile} searchQuery={searchQuery} selectedPageId={selectedPageId}
+                                pinnedFiles={pinnedFiles} onTogglePin={onTogglePin} />
                         ))}
                     </div>
                 )}
@@ -899,8 +916,8 @@ const FileDetailView = ({ page, masterPrompt, onClose, onSave }: {
                     {/* Implement Status Banner */}
                     {implementStatus && (
                         <div className={`implement-status-banner mt-2 rounded-lg ${implementStatus.includes('failed') || implementStatus.includes('Failed') ? 'error' :
-                                implementStatus.includes('\u2705') || implementStatus.includes('Applied') ? 'success' :
-                                    implementStatus.includes('\u21a9\ufe0f') || implementStatus.includes('Reverted') ? 'info' : 'loading'
+                            implementStatus.includes('\u2705') || implementStatus.includes('Applied') ? 'success' :
+                                implementStatus.includes('\u21a9\ufe0f') || implementStatus.includes('Reverted') ? 'info' : 'loading'
                             }`}>
                             {implementStatus}
                         </div>
@@ -1315,7 +1332,10 @@ export default function Home() {
     const [selectedPageId, setSelectedPageId] = useState<string | null>(null)
     const [openTabs, setOpenTabs] = useState<string[]>([])
     const [isFullscreen, setIsFullscreen] = useState(false)
+    const [pinnedFiles, setPinnedFiles] = useState<Set<string>>(new Set())
     const [project, setProject] = useState<Project | null>(null)
+    const [user, setUser] = useState<any>(null)
+    const [showProfile, setShowProfile] = useState(false)
     // Resizable sidebar state
     const [sidebarWidth, setSidebarWidth] = useState(280)
     const isResizing = useRef(false)
@@ -1349,6 +1369,29 @@ export default function Home() {
     }, [sidebarWidth])
 
     // --- Init (same pattern as new-dashboard) ---
+    // Load pinned files from localStorage
+    useEffect(() => {
+        try {
+            const saved = localStorage.getItem('dev-dashboard-pinned-files')
+            if (saved) {
+                setPinnedFiles(new Set(JSON.parse(saved)))
+            }
+        } catch (e) { /* ignore parse errors */ }
+    }, [])
+
+    const togglePin = useCallback((pageId: string) => {
+        setPinnedFiles(prev => {
+            const next = new Set(prev)
+            if (next.has(pageId)) {
+                next.delete(pageId)
+            } else {
+                next.add(pageId)
+            }
+            localStorage.setItem('dev-dashboard-pinned-files', JSON.stringify([...next]))
+            return next
+        })
+    }, [])
+
     useEffect(() => { initDashboard() }, [])
 
     const initDashboard = async () => {
@@ -1356,9 +1399,10 @@ export default function Home() {
             const token = getAccessToken()
             if (!token) { router.push('/login'); return }
             const userStr = typeof window !== 'undefined' ? localStorage.getItem('user') : null
-            const user = userStr ? JSON.parse(userStr) : null
-            if (!user) { router.push('/login'); return }
-            const projectsRes = await apiRequest(`/api/projects/user/${user.id}`)
+            const storedUser = userStr ? JSON.parse(userStr) : null
+            if (!storedUser) { router.push('/login'); return }
+            setUser(storedUser)
+            const projectsRes = await apiRequest(`/api/projects/user/${storedUser.id}`)
             if (projectsRes.success && projectsRes.data?.projects) {
                 const active = projectsRes.data.projects.find((p: Project) => p.isActive)
                 if (active) {
@@ -1531,260 +1575,323 @@ export default function Home() {
     }
 
     return (
-        <div className="min-h-screen text-slate-800 dark:text-slate-200 font-sans ide-page-wrapper">
-            {/* Decorative Background Hexagons */}
-            <div className="ide-hex-decorations">
-                <svg className="ide-hex-svg" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M100 10L178.66 55V145L100 190L21.34 145V55L100 10Z" stroke="currentColor" strokeWidth="1" opacity="0.08" />
-                    <path d="M100 40L152.66 70V130L100 160L47.34 130V70L100 40Z" stroke="currentColor" strokeWidth="1" opacity="0.05" />
-                    <path d="M100 70L126.66 85V115L100 130L73.34 115V85L100 70Z" stroke="currentColor" strokeWidth="1" opacity="0.03" />
-                </svg>
-            </div>
-
-            {/* Compact Header */}
-            <header className="ide-main-header">
-                <div className="flex items-center gap-3 min-w-0">
-                    <button
-                        onClick={() => router.push('/new-dashboard')}
-                        className="ide-back-btn"
-                        title="Back to Dashboard"
-                    >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                        </svg>
-                    </button>
-                    <h1 className="ide-main-title">
-                        {project?.name || 'Developer View'}
-                    </h1>
-                    <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-purple-500/20">DEV</span>
+        <>
+            <div className="min-h-screen text-slate-800 dark:text-slate-200 font-sans ide-page-wrapper">
+                {/* Decorative Background Hexagons */}
+                <div className="ide-hex-decorations">
+                    <svg className="ide-hex-svg" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M100 10L178.66 55V145L100 190L21.34 145V55L100 10Z" stroke="currentColor" strokeWidth="1" opacity="0.08" />
+                        <path d="M100 40L152.66 70V130L100 160L47.34 130V70L100 40Z" stroke="currentColor" strokeWidth="1" opacity="0.05" />
+                        <path d="M100 70L126.66 85V115L100 130L73.34 115V85L100 70Z" stroke="currentColor" strokeWidth="1" opacity="0.03" />
+                    </svg>
                 </div>
 
-                <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-                    <button
-                        onClick={handleSync}
-                        disabled={syncing}
-                        className={`ide-sync-btn ${syncing ? 'syncing' : ''}`}
-                    >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                        </svg>
-                        {syncing ? 'Syncing...' : 'Sync'}
-                    </button>
-                    <ThemeToggle />
-                    <button onClick={handleLogout} className="ide-back-btn" title="Logout">
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
-                    </button>
-                </div>
-            </header>
+                {/* Compact Header */}
+                <header className="ide-main-header">
+                    <div className="flex items-center gap-3 min-w-0">
+                        <button
+                            onClick={() => router.push('/new-dashboard')}
+                            className="ide-back-btn"
+                            title="Back to Dashboard"
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                            </svg>
+                        </button>
+                        <h1 className="ide-main-title">
+                            {project?.name || 'Developer View'}
+                        </h1>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-purple-500/20">DEV</span>
+                    </div>
 
-            {/* Sync Message Banner */}
-            {syncMessage && (
-                <div className={`mx-2 mb-2 rounded-lg p-2.5 sm:p-3 text-center text-xs sm:text-sm font-medium border ${syncMessage.includes('failed') || syncMessage.includes('Failed')
-                    ? 'bg-red-500/10 border-red-500/25 text-red-600 dark:text-red-400'
-                    : syncMessage.includes('Scanning')
-                        ? 'bg-blue-500/10 border-blue-500/25 text-blue-600 dark:text-blue-400'
-                        : 'bg-emerald-500/10 border-emerald-500/25 text-emerald-600 dark:text-emerald-400'
-                    }`}>
-                    {syncMessage}
-                </div>
-            )}
+                    <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+                        <button
+                            onClick={handleSync}
+                            disabled={syncing}
+                            className={`ide-sync-btn ${syncing ? 'syncing' : ''}`}
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                            {syncing ? 'Syncing...' : 'Sync'}
+                        </button>
+                        <button
+                            onClick={() => setShowProfile(true)}
+                            id="profile-btn"
+                            style={{
+                                width: 32, height: 32, borderRadius: 8,
+                                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                fontSize: 11, fontWeight: 700, color: '#fff',
+                                border: 'none', cursor: 'pointer',
+                                boxShadow: '0 2px 6px rgba(99, 102, 241, 0.3)',
+                                transition: 'all 0.2s ease', flexShrink: 0,
+                            }}
+                            title="Profile & Settings"
+                        >
+                            {user?.name?.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2) || '?'}
+                        </button>
+                    </div>
+                </header>
 
-            {/* Error State */}
-            {error && (
-                <div className="mx-2 mb-2 bg-red-500/10 border border-red-500/20 rounded-lg p-3 flex items-center gap-3">
-                    <span className="text-lg">⚠️</span>
-                    <p className="text-xs text-red-600 dark:text-red-400 flex-1 truncate">{error}</p>
-                    <button onClick={() => setError(null)} className="text-red-400 hover:text-red-300 text-sm">×</button>
-                </div>
-            )}
+                {/* Sync Message Banner */}
+                {syncMessage && (
+                    <div className={`mx-2 mb-2 rounded-lg p-2.5 sm:p-3 text-center text-xs sm:text-sm font-medium border ${syncMessage.includes('failed') || syncMessage.includes('Failed')
+                        ? 'bg-red-500/10 border-red-500/25 text-red-600 dark:text-red-400'
+                        : syncMessage.includes('Scanning')
+                            ? 'bg-blue-500/10 border-blue-500/25 text-blue-600 dark:text-blue-400'
+                            : 'bg-emerald-500/10 border-emerald-500/25 text-emerald-600 dark:text-emerald-400'
+                        }`}>
+                        {syncMessage}
+                    </div>
+                )}
 
-            {/* Loading State */}
-            {loading && !pages.length && (
-                <div className="flex justify-center py-20">
-                    <div className="w-10 h-10 border-4 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin"></div>
-                </div>
-            )}
+                {/* Error State */}
+                {error && (
+                    <div className="mx-2 mb-2 bg-red-500/10 border border-red-500/20 rounded-lg p-3 flex items-center gap-3">
+                        <span className="text-lg">⚠️</span>
+                        <p className="text-xs text-red-600 dark:text-red-400 flex-1 truncate">{error}</p>
+                        <button onClick={() => setError(null)} className="text-red-400 hover:text-red-300 text-sm">×</button>
+                    </div>
+                )}
 
-            {/* Empty State */}
-            {!loading && !pages.length && !error && (
-                <div className="text-center py-20 glass-panel rounded-2xl px-4">
-                    <div className="text-5xl mb-6 opacity-50">📭</div>
-                    <h2 className="text-2xl font-bold text-slate-700 dark:text-slate-300 mb-4">Database is Empty</h2>
-                    <p className="text-sm text-slate-400 dark:text-slate-500 max-w-md mx-auto mb-8">
-                        Click the Sync button to scan and import files from your codebase.
-                    </p>
-                    <button onClick={handleSync} className="px-8 py-3 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-bold text-sm shadow-lg shadow-indigo-500/25 transition-all">
-                        Initialize Database
-                    </button>
-                </div>
-            )}
+                {/* Loading State */}
+                {loading && !pages.length && (
+                    <div className="flex justify-center py-20">
+                        <div className="w-10 h-10 border-4 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin"></div>
+                    </div>
+                )}
 
-            {/* VS Code IDE Layout */}
-            {filteredFolders.length > 0 && (
-                <>
-                    <div className={`ide-layout ${isFullscreen ? 'ide-fullscreen' : ''}`}>
-                        {/* LEFT SIDEBAR - Tree Explorer (resizable) - hidden in fullscreen */}
-                        {!isFullscreen && (
-                            <>
-                                <div className="ide-sidebar" style={{ width: `${sidebarWidth}px`, minWidth: '180px', maxWidth: '500px' }}>
-                                    {/* Search in sidebar */}
-                                    <div className="ide-sidebar-search">
-                                        <svg className="ide-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                            <circle cx="11" cy="11" r="8" />
-                                            <path d="M21 21l-4.35-4.35" />
-                                        </svg>
-                                        <input
-                                            type="text"
-                                            placeholder="Search files..."
-                                            value={searchQuery}
-                                            onChange={(e) => setSearchQuery(e.target.value)}
+                {/* Empty State */}
+                {!loading && !pages.length && !error && (
+                    <div className="text-center py-20 glass-panel rounded-2xl px-4">
+                        <div className="text-5xl mb-6 opacity-50">📭</div>
+                        <h2 className="text-2xl font-bold text-slate-700 dark:text-slate-300 mb-4">Database is Empty</h2>
+                        <p className="text-sm text-slate-400 dark:text-slate-500 max-w-md mx-auto mb-8">
+                            Click the Sync button to scan and import files from your codebase.
+                        </p>
+                        <button onClick={handleSync} className="px-8 py-3 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-bold text-sm shadow-lg shadow-indigo-500/25 transition-all">
+                            Initialize Database
+                        </button>
+                    </div>
+                )}
+
+                {/* VS Code IDE Layout */}
+                {filteredFolders.length > 0 && (
+                    <>
+                        <div className={`ide-layout ${isFullscreen ? 'ide-fullscreen' : ''}`}>
+                            {/* LEFT SIDEBAR - Tree Explorer (resizable) - hidden in fullscreen */}
+                            {!isFullscreen && (
+                                <>
+                                    <div className="ide-sidebar" style={{ width: `${sidebarWidth}px`, minWidth: '180px', maxWidth: '500px' }}>
+                                        {/* Search in sidebar */}
+                                        <div className="ide-sidebar-search">
+                                            <svg className="ide-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                <circle cx="11" cy="11" r="8" />
+                                                <path d="M21 21l-4.35-4.35" />
+                                            </svg>
+                                            <input
+                                                type="text"
+                                                placeholder="Search files..."
+                                                value={searchQuery}
+                                                onChange={(e) => setSearchQuery(e.target.value)}
+                                            />
+                                        </div>
+
+                                        {/* Pinned Files Section */}
+                                        {pinnedFiles.size > 0 && (
+                                            <div className="pinned-section">
+                                                <div className="pinned-section-header">
+                                                    <span className="pinned-section-title">
+                                                        <svg viewBox="0 0 24 24"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" /></svg>
+                                                        PINNED
+                                                    </span>
+                                                </div>
+                                                {[...pinnedFiles].map(pinnedId => {
+                                                    const pinnedPage = pages.find(p => p.id === pinnedId)
+                                                    if (!pinnedPage) return null
+                                                    return (
+                                                        <div
+                                                            key={pinnedId}
+                                                            className={`pinned-file-row ${selectedPageId === pinnedId ? 'selected' : ''}`}
+                                                            onClick={() => selectFile(pinnedId)}
+                                                            title={pinnedPage.filePath}
+                                                        >
+                                                            <FileIcon filePath={pinnedPage.filePath} />
+                                                            <span className="pinned-file-label">{pinnedPage.componentName}</span>
+                                                            <button
+                                                                className="pinned-unpin-btn"
+                                                                onClick={(e) => { e.stopPropagation(); togglePin(pinnedId) }}
+                                                                title="Unpin file"
+                                                            >
+                                                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                                    <path d="M18 6L6 18" /><path d="M6 6l12 12" />
+                                                                </svg>
+                                                            </button>
+                                                        </div>
+                                                    )
+                                                })}
+                                            </div>
+                                        )}
+
+                                        <TreeViewComponent
+                                            tree={tree}
+                                            expandedNodes={expandedNodes}
+                                            onToggleNode={toggleNode}
+                                            onExpandAll={expandAllNodes}
+                                            onCollapseAll={collapseAllNodes}
+                                            onNavigateToFile={selectFile}
+                                            onGenerate={handleGenerate}
+                                            generatingFile={generatingFile}
+                                            searchQuery={searchQuery}
+                                            selectedPageId={selectedPageId}
+                                            pinnedFiles={pinnedFiles}
+                                            onTogglePin={togglePin}
                                         />
                                     </div>
-                                    <TreeViewComponent
-                                        tree={tree}
-                                        expandedNodes={expandedNodes}
-                                        onToggleNode={toggleNode}
-                                        onExpandAll={expandAllNodes}
-                                        onCollapseAll={collapseAllNodes}
-                                        onNavigateToFile={selectFile}
-                                        onGenerate={handleGenerate}
-                                        generatingFile={generatingFile}
-                                        searchQuery={searchQuery}
-                                        selectedPageId={selectedPageId}
+
+                                    {/* Resize Handle */}
+                                    <div
+                                        className="ide-resize-handle"
+                                        onMouseDown={handleMouseDown}
+                                        title="Drag to resize sidebar"
                                     />
+                                </>
+                            )}
+
+                            {/* RIGHT - Editor Panel */}
+                            <div className="ide-editor">
+                                {/* Tab Bar with Fullscreen Toggle */}
+                                <div className="ide-tab-bar">
+                                    <div className="ide-tabs-scroll">
+                                        {openTabs.map(tabId => {
+                                            const tabPage = pages.find(p => p.id === tabId)
+                                            if (!tabPage) return null
+                                            return (
+                                                <div
+                                                    key={tabId}
+                                                    className={`ide-tab ${selectedPageId === tabId ? 'active' : ''}`}
+                                                    onClick={() => setSelectedPageId(tabId)}
+                                                    role="tab"
+                                                    tabIndex={0}
+                                                    onKeyDown={(e) => { if (e.key === 'Enter') setSelectedPageId(tabId) }}
+                                                >
+                                                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                                        <path d="M3 1h7l3 3v10.5a.5.5 0 01-.5.5h-9a.5.5 0 01-.5-.5v-13A.5.5 0 013 1z" fill={getFileColor(tabPage.filePath)} opacity="0.85" />
+                                                    </svg>
+                                                    {tabPage.componentName}
+                                                    <button
+                                                        className="ide-tab-close"
+                                                        onClick={(e) => { e.stopPropagation(); closeTab(tabId) }}
+                                                        title="Close"
+                                                    >×</button>
+                                                </div>
+                                            )
+                                        })}
+                                    </div>
+                                    {/* Open Full Detail Page */}
+                                    {selectedPageId && (
+                                        <button
+                                            className="ide-fullscreen-btn"
+                                            onClick={() => router.push(`/prompt/${selectedPageId}`)}
+                                            title="Open full detail page"
+                                        >
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" />
+                                            </svg>
+                                        </button>
+                                    )}
                                 </div>
 
-                                {/* Resize Handle */}
-                                <div
-                                    className="ide-resize-handle"
-                                    onMouseDown={handleMouseDown}
-                                    title="Drag to resize sidebar"
-                                />
-                            </>
-                        )}
+                                {/* Breadcrumb */}
+                                {selectedPage && (
+                                    <div className="ide-breadcrumb">
+                                        {selectedPage.filePath.split('/').map((part, i, arr) => (
+                                            <span key={i}>
+                                                {i > 0 && <span className="separator"> › </span>}
+                                                <span>{part}</span>
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
 
-                        {/* RIGHT - Editor Panel */}
-                        <div className="ide-editor">
-                            {/* Tab Bar with Fullscreen Toggle */}
-                            <div className="ide-tab-bar">
-                                <div className="ide-tabs-scroll">
-                                    {openTabs.map(tabId => {
-                                        const tabPage = pages.find(p => p.id === tabId)
-                                        if (!tabPage) return null
-                                        return (
-                                            <div
-                                                key={tabId}
-                                                className={`ide-tab ${selectedPageId === tabId ? 'active' : ''}`}
-                                                onClick={() => setSelectedPageId(tabId)}
-                                                role="tab"
-                                                tabIndex={0}
-                                                onKeyDown={(e) => { if (e.key === 'Enter') setSelectedPageId(tabId) }}
-                                            >
-                                                <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                                                    <path d="M3 1h7l3 3v10.5a.5.5 0 01-.5.5h-9a.5.5 0 01-.5-.5v-13A.5.5 0 013 1z" fill={getFileColor(tabPage.filePath)} opacity="0.85" />
-                                                </svg>
-                                                {tabPage.componentName}
-                                                <button
-                                                    className="ide-tab-close"
-                                                    onClick={(e) => { e.stopPropagation(); closeTab(tabId) }}
-                                                    title="Close"
-                                                >×</button>
+                                {/* Editor Content — Detail View via embedded iframe */}
+                                {selectedPage ? (
+                                    <div className="ide-content ide-iframe-container">
+                                        <iframe
+                                            key={selectedPage.id}
+                                            src={`/prompt/${selectedPage.id}?embedded=true${project ? `&projectId=${project.id}` : ''}`}
+                                            className="ide-detail-iframe"
+                                            title={`Detail: ${selectedPage.componentName}`}
+                                        />
+                                    </div>
+                                ) : (
+                                    /* Welcome Screen */
+                                    <div className="ide-welcome">
+                                        <div className="ide-welcome-folder-wrapper">
+                                            <div className="ide-welcome-folder-bg"></div>
+                                            <span className="ide-welcome-folder-emoji">📂</span>
+                                        </div>
+                                        <h2>Agentic Prompt DB</h2>
+                                        <p>Select a file from the explorer to view its prompts and sections.</p>
+                                        <div className="ide-welcome-stats-card">
+                                            <div className="ide-welcome-stat">
+                                                <div className="ide-welcome-stat-value" style={{ color: '#5b7fff' }}>{Object.keys(groupedPages).length}</div>
+                                                <div className="ide-welcome-stat-label">FOLDERS</div>
                                             </div>
-                                        )
-                                    })}
-                                </div>
-                                {/* Open Full Detail Page */}
-                                {selectedPageId && (
-                                    <button
-                                        className="ide-fullscreen-btn"
-                                        onClick={() => router.push(`/prompt/${selectedPageId}`)}
-                                        title="Open full detail page"
-                                    >
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                            <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" />
-                                        </svg>
-                                    </button>
+                                            <div className="ide-welcome-stat">
+                                                <div className="ide-welcome-stat-value" style={{ color: '#5b7fff' }}>{pages.length}</div>
+                                                <div className="ide-welcome-stat-label">FILES</div>
+                                            </div>
+                                            <div className="ide-welcome-stat">
+                                                <div className="ide-welcome-stat-value" style={{ color: '#e2793d' }}>{pages.reduce((sum, p) => sum + p.totalLines, 0).toLocaleString()}</div>
+                                                <div className="ide-welcome-stat-label">TOTAL LOC</div>
+                                            </div>
+                                        </div>
+                                    </div>
                                 )}
                             </div>
-
-                            {/* Breadcrumb */}
-                            {selectedPage && (
-                                <div className="ide-breadcrumb">
-                                    {selectedPage.filePath.split('/').map((part, i, arr) => (
-                                        <span key={i}>
-                                            {i > 0 && <span className="separator"> › </span>}
-                                            <span>{part}</span>
-                                        </span>
-                                    ))}
-                                </div>
-                            )}
-
-                            {/* Editor Content — Detail View via embedded iframe */}
-                            {selectedPage ? (
-                                <div className="ide-content ide-iframe-container">
-                                    <iframe
-                                        key={selectedPage.id}
-                                        src={`/prompt/${selectedPage.id}?embedded=true${project ? `&projectId=${project.id}` : ''}`}
-                                        className="ide-detail-iframe"
-                                        title={`Detail: ${selectedPage.componentName}`}
-                                    />
-                                </div>
-                            ) : (
-                                /* Welcome Screen */
-                                <div className="ide-welcome">
-                                    <div className="ide-welcome-folder-wrapper">
-                                        <div className="ide-welcome-folder-bg"></div>
-                                        <span className="ide-welcome-folder-emoji">📂</span>
-                                    </div>
-                                    <h2>Agentic Prompt DB</h2>
-                                    <p>Select a file from the explorer to view its prompts and sections.</p>
-                                    <div className="ide-welcome-stats-card">
-                                        <div className="ide-welcome-stat">
-                                            <div className="ide-welcome-stat-value" style={{ color: '#5b7fff' }}>{Object.keys(groupedPages).length}</div>
-                                            <div className="ide-welcome-stat-label">FOLDERS</div>
-                                        </div>
-                                        <div className="ide-welcome-stat">
-                                            <div className="ide-welcome-stat-value" style={{ color: '#5b7fff' }}>{pages.length}</div>
-                                            <div className="ide-welcome-stat-label">FILES</div>
-                                        </div>
-                                        <div className="ide-welcome-stat">
-                                            <div className="ide-welcome-stat-value" style={{ color: '#e2793d' }}>{pages.reduce((sum, p) => sum + p.totalLines, 0).toLocaleString()}</div>
-                                            <div className="ide-welcome-stat-label">TOTAL LOC</div>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
                         </div>
-                    </div>
 
-                    {/* Status Bar */}
-                    <div className="ide-status-bar">
-                        <div className="ide-status-left">
-                            <span className="ide-status-connected">
-                                <span className="ide-status-dot-green"></span>
-                                Connected
-                            </span>
-                            <span className="ide-status-branch">
-                                <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                                    <path d="M11.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122V6a2.5 2.5 0 01-2.5 2.5H7.5v2.128a2.251 2.251 0 11-1.5 0V5.372a2.25 2.25 0 111.5 0v1.836A4 4 0 009.5 7h.5a1 1 0 001-1v-.628A2.25 2.25 0 019.5 3.25zM4.25 3a.75.75 0 100 1.5.75.75 0 000-1.5zM4.25 12a.75.75 0 100 1.5.75.75 0 000-1.5z" />
+                        {/* Status Bar */}
+                        <div className="ide-status-bar">
+                            <div className="ide-status-left">
+                                <span className="ide-status-connected">
+                                    <span className="ide-status-dot-green"></span>
+                                    Connected
+                                </span>
+                                <span className="ide-status-branch">
+                                    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                                        <path d="M11.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122V6a2.5 2.5 0 01-2.5 2.5H7.5v2.128a2.251 2.251 0 11-1.5 0V5.372a2.25 2.25 0 111.5 0v1.836A4 4 0 009.5 7h.5a1 1 0 001-1v-.628A2.25 2.25 0 019.5 3.25zM4.25 3a.75.75 0 100 1.5.75.75 0 000-1.5zM4.25 12a.75.75 0 100 1.5.75.75 0 000-1.5z" />
+                                    </svg>
+                                    master*
+                                </span>
+                            </div>
+                            <div className="ide-status-right">
+                                {selectedPage && (
+                                    <span className="ide-status-info">Ln {selectedPage.totalLines}, Col 42</span>
+                                )}
+                                <span className="ide-status-info">UTF-8</span>
+                                <span className="ide-status-info">JavaScript</span>
+                                <svg className="ide-status-bell" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                                    <path d="M13.73 21a2 2 0 01-3.46 0" />
                                 </svg>
-                                master*
-                            </span>
+                            </div>
                         </div>
-                        <div className="ide-status-right">
-                            {selectedPage && (
-                                <span className="ide-status-info">Ln {selectedPage.totalLines}, Col 42</span>
-                            )}
-                            <span className="ide-status-info">UTF-8</span>
-                            <span className="ide-status-info">JavaScript</span>
-                            <svg className="ide-status-bell" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9" />
-                                <path d="M13.73 21a2 2 0 01-3.46 0" />
-                            </svg>
-                        </div>
-                    </div>
-                </>
+                    </>
+                )}
+            </div>
+
+            {/* Profile Panel */}
+            {user && (
+                <ProfilePanel
+                    user={user}
+                    isOpen={showProfile}
+                    onClose={() => setShowProfile(false)}
+                    onLogout={handleLogout}
+                />
             )}
-        </div>
+        </>
     )
 }
