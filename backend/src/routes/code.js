@@ -1,5 +1,5 @@
 const express = require('express');
-const fs = require('fs');
+const fs = require('fs/promises');
 const path = require('path');
 const { prisma } = require('../lib/prisma');
 const { resolveProjectRoot } = require('../lib/resolveProject');
@@ -34,7 +34,9 @@ router.get('/:id', async (req, res) => {
         // filePath is stored as relative path like "app/form-completion/{id}/page.js"
         const absolutePath = path.join(rootDir, page.filePath.split('/').join(path.sep));
 
-        if (!fs.existsSync(absolutePath)) {
+        try {
+            await fs.access(absolutePath);
+        } catch {
             return res.status(404).json({
                 success: false,
                 error: `Source file not found: ${page.filePath}`,
@@ -43,8 +45,10 @@ router.get('/:id', async (req, res) => {
             });
         }
 
-        const sourceCode = fs.readFileSync(absolutePath, 'utf-8');
-        const stats = fs.statSync(absolutePath);
+        const [sourceCode, stats] = await Promise.all([
+            fs.readFile(absolutePath, 'utf-8'),
+            fs.stat(absolutePath)
+        ]);
 
         res.json({
             success: true,
@@ -94,7 +98,9 @@ router.post('/:id', async (req, res) => {
 
         const absolutePath = path.join(rootDir, page.filePath.split('/').join(path.sep));
 
-        if (!fs.existsSync(absolutePath)) {
+        try {
+            await fs.access(absolutePath);
+        } catch {
             return res.status(404).json({
                 success: false,
                 error: `Source file not found: ${page.filePath}`
@@ -102,7 +108,7 @@ router.post('/:id', async (req, res) => {
         }
 
         // Write the updated source code back to the file
-        fs.writeFileSync(absolutePath, sourceCode, 'utf-8');
+        await fs.writeFile(absolutePath, sourceCode, 'utf-8');
 
         // Update totalLines in database
         const totalLines = sourceCode.split(/\r\n|\r|\n/).length;

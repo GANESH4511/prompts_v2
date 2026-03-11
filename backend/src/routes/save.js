@@ -1,5 +1,5 @@
 const express = require('express');
-const fs = require('fs');
+const fs = require('fs/promises');
 const path = require('path');
 const { prisma } = require('../lib/prisma');
 const { resolveProjectRoot } = require('../lib/resolveProject');
@@ -73,18 +73,18 @@ router.post('/', async (req, res) => {
 
         // Ensure the directory exists
         const dir = path.dirname(targetFilePath);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-        }
+        await fs.mkdir(dir, { recursive: true });
 
         // Delete old file if it exists (clean slate)
-        if (fs.existsSync(targetFilePath)) {
-            fs.unlinkSync(targetFilePath);
+        try {
+            await fs.unlink(targetFilePath);
             console.log(`  🗑️  Deleted old file`);
+        } catch {
+            // File didn't exist, that's fine
         }
 
         // Write new content to the prompt file
-        fs.writeFileSync(targetFilePath, content, 'utf-8');
+        await fs.writeFile(targetFilePath, content, 'utf-8');
         console.log(`  ✅ Written new content to file`);
 
         // Update rawContent and promptFilePath in DB

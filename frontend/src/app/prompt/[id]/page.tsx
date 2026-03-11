@@ -53,8 +53,8 @@ interface Page {
     promptFilePath: string | null
     projectId: string | null
     sections: Section[]
-    stateVars: StateVar[]
-    functions: PageFunc[]
+    stateVars?: StateVar[]
+    functions?: PageFunc[]
 }
 
 interface MasterPrompt {
@@ -235,7 +235,7 @@ export default function PromptDetailPage() {
         try {
             // Pass projectId to scope the query if available
             const queryParams = projectId ? `?projectId=${projectId}` : ''
-            const result = await apiRequest<{ pages: Page[], masterPrompts: MasterPrompt[] }>(`/api/pages${queryParams}`)
+            const result = await apiRequest<{ pages: Page[], masterPrompts?: MasterPrompt[] }>(`/api/pages${queryParams}`)
 
             if (result.status === 401) {
                 clearAuthData()
@@ -258,7 +258,7 @@ export default function PromptDetailPage() {
                         const newUrl = `/prompt/${foundPage.id}${window.location.search}`
                         window.history.replaceState(window.history.state, '', newUrl)
                     }
-                    const foundMasterPrompt = result.data.masterPrompts.find(m => m.pageFilePath === foundPage.filePath)
+                    const foundMasterPrompt = result.data.masterPrompts?.find(m => m.pageFilePath === foundPage.filePath)
                     if (foundMasterPrompt) {
                         setMasterPrompt(foundMasterPrompt)
                     }

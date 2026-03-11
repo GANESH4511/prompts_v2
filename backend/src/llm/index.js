@@ -19,6 +19,11 @@ const PROVIDERS = {
     openai: () => require('./openai')
 };
 
+// In-memory template cache: key = "type/version" -> { content, version, type }
+const templateCache = new Map();
+// Latest version cache: key = templateType -> version string
+const latestVersionCache = new Map();
+
 /**
  * Get the active LLM provider based on LLM_PROVIDER env var.
  */
@@ -37,9 +42,15 @@ function getProvider() {
 
 /**
  * Load a template file from the templates directory.
+ * Cached in memory after first read.
  * Returns { content, version, type }
  */
 function loadTemplate(templateType, version) {
+    const cacheKey = `${templateType}/${version}`;
+    if (templateCache.has(cacheKey)) {
+        return templateCache.get(cacheKey);
+    }
+
     const templateDir = path.resolve(__dirname, '../../templates', templateType);
     const templatePath = path.join(templateDir, `${version}.txt`);
 
@@ -48,17 +59,20 @@ function loadTemplate(templateType, version) {
     }
 
     const content = fs.readFileSync(templatePath, 'utf-8');
-    return {
-        content,
-        version,
-        type: templateType
-    };
+    const entry = { content, version, type: templateType };
+    templateCache.set(cacheKey, entry);
+    return entry;
 }
 
 /**
  * Get the latest version available for a template type.
+ * Cached in memory after first directory scan.
  */
 function getLatestVersion(templateType) {
+    if (latestVersionCache.has(templateType)) {
+        return latestVersionCache.get(templateType);
+    }
+
     const templateDir = path.resolve(__dirname, '../../templates', templateType);
 
     if (!fs.existsSync(templateDir)) {
@@ -75,6 +89,7 @@ function getLatestVersion(templateType) {
         throw new Error(`No templates found in: ${templateDir}`);
     }
 
+    latestVersionCache.set(templateType, files[0]);
     return files[0];
 }
 

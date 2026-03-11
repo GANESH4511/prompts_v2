@@ -59,12 +59,16 @@ router.post('/', async (req, res) => {
         res.setHeader('X-Accel-Buffering', 'no');
         res.flushHeaders();
 
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 90000); // 90s timeout for chat
+
         const response = await fetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${config.apiKey}`
             },
+            signal: controller.signal,
             body: JSON.stringify({
                 model: modelToUse,
                 messages: messages.map(m => ({
@@ -155,6 +159,7 @@ router.post('/', async (req, res) => {
 
         res.write('data: [DONE]\n\n');
         res.end();
+        clearTimeout(timeout);
         console.log(`  ✅ Chat stream completed`);
 
     } catch (error) {

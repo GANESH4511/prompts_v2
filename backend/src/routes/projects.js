@@ -1,11 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const { PrismaClient } = require('@prisma/client');
+const { prisma } = require('../lib/prisma');
 const path = require('path');
 const fs = require('fs');
 const { seedProject } = require('./seed');
-
-const prisma = new PrismaClient();
 
 // Get all projects for a user
 router.get('/user/:userId', async (req, res) => {
@@ -199,6 +197,25 @@ router.put('/:projectId', async (req, res) => {
         const { projectId } = req.params;
         const { name, description } = req.body;
 
+        // Verify ownership before update
+        const existing = await prisma.project.findUnique({
+            where: { id: projectId }
+        });
+
+        if (!existing) {
+            return res.status(404).json({
+                success: false,
+                message: 'Project not found'
+            });
+        }
+
+        if (existing.userId !== req.user.id) {
+            return res.status(403).json({
+                success: false,
+                message: 'Not authorized to update this project'
+            });
+        }
+
         const project = await prisma.project.update({
             where: { id: projectId },
             data: {
@@ -224,6 +241,25 @@ router.put('/:projectId', async (req, res) => {
 router.delete('/:projectId', async (req, res) => {
     try {
         const { projectId } = req.params;
+
+        // Verify ownership before deletion
+        const existing = await prisma.project.findUnique({
+            where: { id: projectId }
+        });
+
+        if (!existing) {
+            return res.status(404).json({
+                success: false,
+                message: 'Project not found'
+            });
+        }
+
+        if (existing.userId !== req.user.id) {
+            return res.status(403).json({
+                success: false,
+                message: 'Not authorized to delete this project'
+            });
+        }
 
         await prisma.project.delete({
             where: { id: projectId }

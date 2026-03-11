@@ -1,10 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
-const { PrismaClient } = require('@prisma/client');
+const { prisma } = require('../lib/prisma');
 const { generateToken, generateRefreshToken, verifyToken, authenticateToken } = require('../middleware/auth');
-
-const prisma = new PrismaClient();
 
 // Salt rounds for bcrypt
 const SALT_ROUNDS = 12;
@@ -137,8 +135,6 @@ router.post('/login', async (req, res) => {
         const refreshToken = generateRefreshToken(user);
 
         console.log('✅ Login successful for:', user.email);
-        console.log('🔑 JWT Access Token:', accessToken);
-        console.log('🔄 JWT Refresh Token:', refreshToken);
 
         // Return success response
         res.json({

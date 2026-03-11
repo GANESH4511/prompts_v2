@@ -1,15 +1,9 @@
 const jwt = require('jsonwebtoken');
-const { PrismaClient } = require('@prisma/client');
-
-const prisma = new PrismaClient();
+const { prisma } = require('../lib/prisma');
 
 // JWT Secret - In production, use a secure secret stored in environment variables
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
-
-console.log('🔐 JWT Middleware initialized');
-console.log('   JWT_SECRET:', JWT_SECRET ? '✅ Set' : '❌ Using default');
-console.log('   JWT_EXPIRES_IN:', JWT_EXPIRES_IN);
 
 /**
  * Generate JWT Token
@@ -20,10 +14,10 @@ const generateToken = (user) => {
     const payload = {
         id: user.id,
         email: user.email,
+        name: user.name,
         role: user.role
     };
 
-    console.log('🎫 Generating token for user:', user.email);
     return jwt.sign(payload, JWT_SECRET, {
         expiresIn: JWT_EXPIRES_IN
     });
@@ -35,7 +29,6 @@ const generateToken = (user) => {
  * @returns {string} Refresh token
  */
 const generateRefreshToken = (user) => {
-    console.log('🔄 Generating refresh token for user:', user.id);
     return jwt.sign(
         { id: user.id, type: 'refresh' },
         JWT_SECRET,
@@ -51,10 +44,8 @@ const generateRefreshToken = (user) => {
 const verifyToken = (token) => {
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
-        console.log('✅ Token verified for user:', decoded.email || decoded.id);
         return decoded;
     } catch (error) {
-        console.log('❌ Token verification failed:', error.message);
         return null;
     }
 };
@@ -64,15 +55,12 @@ const verifyToken = (token) => {
  * Verifies JWT token from Authorization header
  */
 const authenticateToken = async (req, res, next) => {
-    console.log(`\n🔒 Auth Middleware - ${req.method} ${req.originalUrl}`);
-
     try {
         // Get token from Authorization header
         const authHeader = req.headers['authorization'];
         const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
         if (!token) {
-            console.log('❌ No token provided in Authorization header');
             return res.status(401).json({
                 success: false,
                 message: 'Access token is required',
@@ -80,13 +68,10 @@ const authenticateToken = async (req, res, next) => {
             });
         }
 
-        console.log('📝 Token received, verifying...');
-
         // Verify token
         const decoded = verifyToken(token);
 
         if (!decoded) {
-            console.log('❌ Token is invalid or expired');
             return res.status(401).json({
                 success: false,
                 message: 'Invalid or expired token',
@@ -94,27 +79,30 @@ const authenticateToken = async (req, res, next) => {
             });
         }
 
-        // Check if user still exists
-        const user = await prisma.user.findUnique({
-            where: { id: decoded.id },
-            select: {
-                id: true,
-                email: true,
-                name: true,
-                role: true
-            }
-        });
+        // Use JWT payload directly (name cached in token) — skip DB lookup
+        // Only hit DB if critical fields are missing from token
+        let user = {
+            id: decoded.id,
+            email: decoded.email,
+            name: decoded.name,
+            role: decoded.role
+        };
 
-        if (!user) {
-            console.log('❌ User not found in database:', decoded.id);
-            return res.status(401).json({
-                success: false,
-                message: 'User no longer exists',
-                code: 'USER_NOT_FOUND'
+        if (!user.email || !user.role) {
+            // Fallback: token missing fields, fetch from DB
+            const dbUser = await prisma.user.findUnique({
+                where: { id: decoded.id },
+                select: { id: true, email: true, name: true, role: true }
             });
+            if (!dbUser) {
+                return res.status(401).json({
+                    success: false,
+                    message: 'User no longer exists',
+                    code: 'USER_NOT_FOUND'
+                });
+            }
+            user = dbUser;
         }
-
-        console.log('✅ User authenticated:', user.email);
 
         // Attach user to request object
         req.user = user;

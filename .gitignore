@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+*.txt
 
 # Environment files
 .env

@@ -8,12 +8,17 @@
  */
 
 const express = require('express');
-const fs = require('fs');
+const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { generatePrompt, loadTemplate, getLatestVersion } = require('../llm');
 const { prisma } = require('../lib/prisma');
 const { resolveProjectRoot } = require('../lib/resolveProject');
+const { seedProject } = require('./seed');
+
+async function fileExists(p) {
+    try { await fs.access(p); return true; } catch { return false; }
+}
 
 const router = express.Router();
 
@@ -102,36 +107,7 @@ function applyPatch(fileContent, oldCode, newCode) {
     return newCode.replace(/\r\n/g, '\n');
 }
 
-/**
- * Trigger the existing /api/seed pipeline internally.
- */
-async function triggerSeed(projectId) {
-    const port = process.env.PORT || 5000;
-    const seedUrl = `http://localhost:${port}/api/seed`;
 
-    console.log(`  🔄 Triggering seed for project: ${projectId || 'default'}...`);
-
-    try {
-        const response = await fetch(seedUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ projectId })
-        });
-
-        if (!response.ok) {
-            const body = await response.text();
-            console.warn(`  ⚠️ Seed returned ${response.status}: ${body.substring(0, 200)}`);
-            return { success: false, error: body };
-        }
-
-        const result = await response.json();
-        console.log('  ✅ Seed completed successfully');
-        return result;
-    } catch (err) {
-        console.warn(`  ⚠️ Seed failed: ${err.message}`);
-        return { success: false, error: err.message };
-    }
-}
 
 
 // ==========================================
@@ -178,14 +154,14 @@ router.post('/', async (req, res) => {
 
         const absolutePath = path.join(rootDir, page.filePath.split('/').join(path.sep));
 
-        if (!fs.existsSync(absolutePath)) {
+        if (!await fileExists(absolutePath)) {
             return res.status(404).json({
                 success: false,
                 error: `Source file not found: ${page.filePath}`
             });
         }
 
-        const sourceCode = fs.readFileSync(absolutePath, 'utf-8');
+        const sourceCode = await fs.readFile(absolutePath, 'utf-8');
         console.log(`  📄 Source: ${page.filePath} (${sourceCode.length} chars)`);
 
         // Step 3: Build context for the LLM
@@ -242,8 +218,8 @@ router.post('/', async (req, res) => {
                     : path.join(rootDir, changePath.split('/').join(path.sep));
 
                 let currentCode = '';
-                if (fs.existsSync(changeAbsPath)) {
-                    currentCode = fs.readFileSync(changeAbsPath, 'utf-8');
+                if (await fileExists(changeAbsPath)) {
+                    currentCode = await fs.readFile(changeAbsPath, 'utf-8');
                 }
 
                 // Apply the patch to get the new full file content
@@ -373,10 +349,8 @@ router.post('/apply', async (req, res) => {
             if (diff.isNew || diff.action === 'create') {
                 // Create new file
                 const dir = path.dirname(absPath);
-                if (!fs.existsSync(dir)) {
-                    fs.mkdirSync(dir, { recursive: true });
-                }
-                fs.writeFileSync(absPath, diff.newCode, 'utf-8');
+                await fs.mkdir(dir, { recursive: true });
+                await fs.writeFile(absPath, diff.newCode, 'utf-8');
                 console.log(`  🆕 Created: ${diff.filePath}`);
 
                 filesChanged.push({
@@ -388,12 +362,12 @@ router.post('/apply', async (req, res) => {
             } else {
                 // Modify existing file — create .bak backup first
                 const backupPath = absPath + '.bak';
-                if (fs.existsSync(absPath)) {
-                    fs.copyFileSync(absPath, backupPath);
+                if (await fileExists(absPath)) {
+                    await fs.copyFile(absPath, backupPath);
                     console.log(`  📦 Backup: ${backupPath}`);
                 }
 
-                fs.writeFileSync(absPath, diff.newCode, 'utf-8');
+                await fs.writeFile(absPath, diff.newCode, 'utf-8');
                 console.log(`  ✏️ Modified: ${diff.filePath}`);
 
                 filesChanged.push({
@@ -419,8 +393,8 @@ router.post('/apply', async (req, res) => {
 
         console.log(`  💾 History saved: ${history.id}`);
 
-        // Trigger seed to sync DB
-        const seedResult = await triggerSeed(session.projectId);
+        // Trigger seed to sync DB (direct fn call, no HTTP)
+        const seedResult = await seedProject(session.rootDir, session.projectId);
 
         // Clean up session
         pendingSessions.delete(sessionId);
@@ -482,16 +456,16 @@ router.post('/undo', async (req, res) => {
         for (const file of filesChanged) {
             if (file.action === 'create') {
                 // Delete newly created file
-                if (fs.existsSync(file.absolutePath)) {
-                    fs.unlinkSync(file.absolutePath);
+                try {
+                    await fs.unlink(file.absolutePath);
                     console.log(`  🗑️ Deleted created file: ${file.filePath}`);
                     restoredCount++;
-                }
+                } catch { }
             } else if (file.action === 'modify' && file.backupPath) {
                 // Restore from backup
-                if (fs.existsSync(file.backupPath)) {
-                    fs.copyFileSync(file.backupPath, file.absolutePath);
-                    fs.unlinkSync(file.backupPath); // Clean up backup
+                if (await fileExists(file.backupPath)) {
+                    await fs.copyFile(file.backupPath, file.absolutePath);
+                    await fs.unlink(file.backupPath); // Clean up backup
                     console.log(`  ↩️ Restored: ${file.filePath}`);
                     restoredCount++;
                 } else {
@@ -506,8 +480,11 @@ router.post('/undo', async (req, res) => {
             data: { status: 'reverted' }
         });
 
-        // Trigger seed to sync DB
-        const seedResult = await triggerSeed(history.projectId);
+        // Trigger seed to sync DB (direct fn call, no HTTP)
+        const resolved = await resolveProjectRoot({ projectId: history.projectId });
+        const seedResult = resolved.rootDir
+            ? await seedProject(resolved.rootDir, history.projectId)
+            : { success: false, error: 'Could not resolve project root' };
 
         const elapsed = Date.now() - startTime;
         console.log(`  ⏱️ Undone in ${elapsed}ms (${restoredCount} file(s) restored)\n`);

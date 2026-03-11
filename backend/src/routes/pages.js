@@ -9,7 +9,6 @@ router.get('/', async (req, res) => {
     try {
         const { projectId } = req.query;
 
-        // Build where clause based on projectId
         const where = projectId ? { projectId } : {};
 
         const pages = await prisma.page.findMany({
@@ -19,16 +18,11 @@ router.get('/', async (req, res) => {
                     include: {
                         prompts: true
                     }
-                },
-                stateVars: true,
-                functions: true
+                }
             }
         });
 
-        const masterWhere = projectId ? { projectId } : {};
-        const masterPrompts = await prisma.masterPrompt.findMany({ where: masterWhere });
-
-        res.json({ pages, masterPrompts });
+        res.json({ pages });
     } catch (error) {
         console.error('Error fetching pages:', error);
         res.status(500).json({ error: 'Failed to fetch pages' });

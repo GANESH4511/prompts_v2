@@ -1,8 +1,10 @@
 const express = require('express');
 const fs = require('fs');
+const fsPromises = require('fs/promises');
 const path = require('path');
+const crypto = require('crypto');
 const { prisma } = require('../lib/prisma');
-const { classifyFiles } = require('../llm/classifier');
+const { classifyByRules } = require('../llm/classifier');
 const { resolveProjectRoot } = require('../lib/resolveProject');
 
 const router = express.Router();
@@ -58,7 +60,6 @@ function scanProjectFiles(rootDir) {
                         walk(fullPath);
                     }
                 } else if (entry.isFile()) {
-                    // Skip non-modifiable default files
                     if (SKIP_FILES.has(entry.name)) continue;
 
                     const ext = path.extname(entry.name).toLowerCase();
@@ -79,55 +80,50 @@ function scanProjectFiles(rootDir) {
 }
 
 /**
- * For a given code file, try to find its matching .txt prompt file
- * e.g. app/login/page.js -> app/login/page.txt
- */
-function findMatchingPromptFile(codeFilePath, promptFiles) {
-    const baseName = codeFilePath.replace(/\.(js|jsx|ts|tsx)$/, '.txt');
-    return promptFiles.find(pf => pf === baseName) || null;
-}
-
-/**
  * For a given prompt file, derive the target code file path
- * e.g. app/login/page.txt -> app/login/page.js
  */
 function deriveCodeFileFromPrompt(promptFilePath, codeFiles) {
     const baseName = promptFilePath.replace(/\.txt$/, '');
-    // Try each code extension
     for (const ext of CODE_EXTENSIONS) {
         const candidate = baseName + ext;
         if (codeFiles.includes(candidate)) {
             return candidate;
         }
     }
-    // Default to .js if no matching code file found
     return baseName + '.js';
 }
 
-// Helper to count lines in a file
-function countLines(filePath) {
+/**
+ * Read file content safely (async)
+ */
+async function readFileSafe(filePath) {
     try {
-        if (!fs.existsSync(filePath)) return 0;
-        const content = fs.readFileSync(filePath, 'utf-8');
-        return content.split(/\r\n|\r|\n/).length;
-    } catch (e) {
-        return 0;
-    }
-}
-
-// Helper to read file content safely
-function readFileSafe(filePath) {
-    try {
-        if (!fs.existsSync(filePath)) return null;
-        return fs.readFileSync(filePath, 'utf-8');
-    } catch (e) {
-        console.warn(`Could not read file: ${filePath}`);
+        return await fsPromises.readFile(filePath, 'utf-8');
+    } catch {
         return null;
     }
 }
 
+/**
+ * Get file stat safely (async)
+ */
+async function statSafe(filePath) {
+    try {
+        return await fsPromises.stat(filePath);
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Compute SHA-256 hash of content (first 16 chars)
+ */
+function contentHash(content) {
+    return crypto.createHash('sha256').update(content).digest('hex').substring(0, 16);
+}
+
 // ==========================================
-// Prompt file parsing (same logic as before)
+// Prompt file parsing
 // ==========================================
 
 function parsePromptFile(content) {
@@ -141,7 +137,8 @@ function parsePromptFile(content) {
     const isSkipLine = (line) => {
         if (!line || line.length === 0) return true;
         if (/^[=\-\*_]{3,}$/.test(line)) return true;
-        if (/^#[^#]/.test(line) || line === '#') return true;
+        // Skip single-hash headings but NOT if they are SECTION headers
+        if ((/^#[^#]/.test(line) || line === '#') && !/^#{1,3}\s*(?:SECTION|Section)\s*\d+/i.test(line)) return true;
         return false;
     };
 
@@ -159,8 +156,8 @@ function parsePromptFile(content) {
 
         if (inCodeBlock) continue;
 
-        // Detect Section Header
-        const sectionMatch = line.match(/^(?:SECTION|Section)\s*(\d+)[:.]?\s*(.*)$/i);
+        // Detect Section Header (handles optional markdown # prefixes)
+        const sectionMatch = line.match(/^(?:#{1,3}\s*)?(?:SECTION|Section)\s*(\d+)[:.]?\s*(.*)$/i);
 
         if (sectionMatch) {
             if (currentSection) {
@@ -176,7 +173,7 @@ function parsePromptFile(content) {
 
             let end = lines.length;
             for (let j = i + 1; j < lines.length; j++) {
-                if (/^(?:SECTION|Section)\s*\d+[:.]?\s*/i.test(lines[j].trim())) {
+                if (/^(?:#{1,3}\s*)?(?:SECTION|Section)\s*\d+[:.]?\s*/i.test(lines[j].trim())) {
                     end = j;
                     break;
                 }
@@ -346,162 +343,36 @@ function parsePromptFile(content) {
     return sections;
 }
 
-// Parse Master NLP Prompt
-function parseMasterPrompt(content) {
-    const nlpInstructionMatch = content.match(/INSTRUCTION SYNTAX:\s*([\s\S]*?)AVAILABLE SECTIONS:/);
-    const nlpInstruction = nlpInstructionMatch ? nlpInstructionMatch[1].trim().replace(/"/g, '') : "Modify [SECTION] to [ACTION] at line [LINE]";
-
-    const summaryMatch = content.match(/AVAILABLE SECTIONS:\s*([\s\S]*?)QUERY EXAMPLES:/);
-    const sectionsSummary = summaryMatch ? summaryMatch[1].trim() : "See details";
-
-    const examplesMatch = content.match(/QUERY EXAMPLES:\s*([\s\S]*?)METADATA SOURCE:/);
-    const queryExamples = examplesMatch ? examplesMatch[1].trim() : "";
-
-    return { nlpInstruction, sectionsSummary, queryExamples };
-}
-
-function extractTargetFile(content, fullPath, rootDir) {
-    const match = content.match(/FILE:\s*([^\s|]+)/i);
-    if (match) {
-        return match[1].trim().replace(/\\/g, '/');
-    }
-
-    let relative = path.relative(rootDir, fullPath);
-    relative = relative.replace(/\.txt$/, '.js');
-    return relative.replace(/\\/g, '/');
-}
-
 // ==========================================
-// Core seed logic (reusable by project creation)
+// Incremental upsert for a single page
 // ==========================================
-async function seedProject(rootDir, projectId) {
-    console.log(`\n🔄 Starting ${projectId ? 'project-scoped' : 'full'} sync...`);
-    console.log(`📁 Root directory: ${rootDir}`);
-    if (projectId) console.log(`🔗 Project ID: ${projectId}`);
 
-    if (!fs.existsSync(rootDir)) {
-        throw new Error(`Root directory not found: ${rootDir}`);
-    }
+/**
+ * Upsert a single page with its sections and prompts.
+ * Deletes old sections/prompts via cascade, then recreates.
+ */
+async function upsertPage({ projectId, relPath, componentName, totalLines, purpose, category, promptFilePath, rawContent, hash, mtime, sections }) {
+    // Try to find existing page
+    const existing = await prisma.page.findUnique({
+        where: { projectId_filePath: { projectId, filePath: relPath } }
+    });
 
-    // If project-scoped, delete all existing pages and masters for this project first
-    if (projectId) {
-        await prisma.page.deleteMany({ where: { projectId } });
-        await prisma.masterPrompt.deleteMany({ where: { projectId } });
-    }
+    if (existing) {
+        // Delete old sections (cascade deletes prompts too)
+        await prisma.section.deleteMany({ where: { pageId: existing.id } });
 
-    // Scan all files in the root directory
-    const { codeFiles, promptFiles } = scanProjectFiles(rootDir);
-
-    console.log(`📂 Found ${codeFiles.length} code files`);
-    console.log(`📝 Found ${promptFiles.length} prompt files`);
-
-    // ==========================================
-    // LLM Classification — classify all files into categories
-    // ==========================================
-    const allFilesForClassification = [];
-    for (const cf of codeFiles) {
-        const relPath = path.relative(rootDir, cf).replace(/\\/g, '/');
-        allFilesForClassification.push({ filePath: relPath, fileName: path.basename(cf) });
-    }
-    for (const pf of promptFiles) {
-        const relPath = path.relative(rootDir, pf).replace(/\\/g, '/');
-        allFilesForClassification.push({ filePath: relPath, fileName: path.basename(pf) });
-    }
-
-    let classifications = {};
-    try {
-        classifications = await classifyFiles(allFilesForClassification);
-    } catch (err) {
-        console.error('  ⚠️ Classification failed, all files default to BACKEND:', err.message);
-    }
-
-    const processed = [];
-    const processedCodePaths = new Set();
-
-    // Helper to get the category for a file
-    const getCategory = (relPath) => {
-        return classifications[relPath] || 'BACKEND';
-    };
-
-    // ==========================================
-    // PHASE 1: Process prompt (.txt) files 
-    // These get full prompt parsing + link to code
-    // ==========================================
-    for (const promptFilePath of promptFiles) {
-        const promptContent = readFileSafe(promptFilePath);
-        if (!promptContent) continue;
-
-        const fileName = path.basename(promptFilePath);
-
-        // Handle MASTER prompts
-        if (fileName.includes('MASTER') || promptContent.includes('MASTER NLP PROMPT')) {
-            const targetFilePathRelative = extractTargetFile(promptContent, promptFilePath, rootDir);
-            const parsedMaster = parseMasterPrompt(promptContent);
-
-            if (projectId) {
-                await prisma.masterPrompt.create({
-                    data: {
-                        pageFilePath: targetFilePathRelative,
-                        projectId,
-                        ...parsedMaster
-                    }
-                });
-            } else {
-                await prisma.masterPrompt.upsert({
-                    where: {
-                        projectId_pageFilePath: {
-                            projectId: null,
-                            pageFilePath: targetFilePathRelative
-                        }
-                    },
-                    update: parsedMaster,
-                    create: {
-                        pageFilePath: targetFilePathRelative,
-                        ...parsedMaster
-                    }
-                });
-            }
-            processed.push({ file: fileName, type: 'master', target: targetFilePathRelative });
-            continue;
-        }
-
-        // Find matching code file for this prompt
-        const matchingCodeFile = findMatchingPromptFile(promptFilePath, codeFiles.map(cf => cf))
-            ? promptFilePath.replace(/\.txt$/, '.js')
-            : deriveCodeFileFromPrompt(promptFilePath, codeFiles);
-
-        const targetFilePathRelative = path.relative(rootDir, matchingCodeFile).replace(/\\/g, '/');
-        const targetFilePathAbsolute = matchingCodeFile.includes(':')
-            ? matchingCodeFile
-            : path.join(rootDir, targetFilePathRelative.split('/').join(path.sep));
-
-        // Parse prompt sections
-        const sections = parsePromptFile(promptContent);
-        if (sections.length === 0) {
-            console.log(`  ⏩ Skipping ${fileName}: No sections found`);
-        }
-
-        const actualTotalLines = countLines(targetFilePathAbsolute);
-        const sourceCode = readFileSafe(targetFilePathAbsolute);
-
-        if (!projectId) {
-            await prisma.page.deleteMany({ where: { filePath: targetFilePathRelative, projectId: null } });
-        }
-
-        const jsFileName = path.basename(targetFilePathRelative);
-        const componentName = jsFileName.replace(/\.(js|jsx|ts|tsx)$/, '');
-        const fileCategory = getCategory(targetFilePathRelative);
-
-        await prisma.page.create({
+        // Update page + recreate sections
+        await prisma.page.update({
+            where: { id: existing.id },
             data: {
-                filePath: targetFilePathRelative,
-                componentName: componentName,
-                totalLines: actualTotalLines || 0,
-                purpose: `Prompt file for ${jsFileName}`,
-                category: fileCategory,
-                promptFilePath: promptFilePath,
-                rawContent: promptContent,
-                projectId: projectId || null,
+                componentName,
+                totalLines,
+                purpose,
+                category,
+                promptFilePath,
+                rawContent,
+                contentHash: hash,
+                fileMtime: mtime,
                 sections: {
                     create: sections.map(s => ({
                         name: s.name,
@@ -520,100 +391,303 @@ async function seedProject(rootDir, projectId) {
                 }
             }
         });
-
-        processedCodePaths.add(targetFilePathRelative);
-        processed.push({
-            file: fileName,
-            type: 'page',
-            target: targetFilePathRelative,
-            lines: actualTotalLines,
-            sections: sections.length,
-            hasCode: !!sourceCode,
-            hasPrompt: true,
-            category: fileCategory
-        });
-    }
-
-    // ==========================================
-    // PHASE 2: Process code files WITHOUT prompts
-    // ==========================================
-    for (const codeFilePath of codeFiles) {
-        const relPath = path.relative(rootDir, codeFilePath).replace(/\\/g, '/');
-
-        if (processedCodePaths.has(relPath)) continue;
-
-        const sourceCode = readFileSafe(codeFilePath);
-        if (!sourceCode) continue;
-
-        const totalLines = sourceCode.split(/\r\n|\r|\n/).length;
-        const fileName = path.basename(codeFilePath);
-        const componentName = fileName.replace(/\.(js|jsx|ts|tsx)$/, '');
-        const folderPath = relPath.substring(0, relPath.lastIndexOf('/')) || 'root';
-        const fileCategory = getCategory(relPath);
-
-        if (!projectId) {
-            await prisma.page.deleteMany({ where: { filePath: relPath, projectId: null } });
-        }
-
+    } else {
         await prisma.page.create({
             data: {
                 filePath: relPath,
-                componentName: componentName,
-                totalLines: totalLines,
+                componentName,
+                totalLines,
+                purpose,
+                category,
+                promptFilePath,
+                rawContent,
+                contentHash: hash,
+                fileMtime: mtime,
+                projectId,
+                sections: {
+                    create: sections.map(s => ({
+                        name: s.name,
+                        startLine: s.startLine,
+                        endLine: s.endLine,
+                        purpose: s.purpose,
+                        prompts: {
+                            create: s.prompts.map(p => ({
+                                template: p.template,
+                                example: p.example,
+                                lineNumber: p.lineNumber,
+                                promptType: p.promptType || 'NLP'
+                            }))
+                        }
+                    }))
+                }
+            }
+        });
+    }
+}
+
+// ==========================================
+// Core seed logic — INCREMENTAL
+// Only processes files whose mtime/hash changed since last sync.
+// Uses rule-based classification (no LLM call) for speed.
+// ==========================================
+async function seedProject(rootDir, projectId) {
+    const startTime = Date.now();
+    console.log(`\n🔄 Starting incremental sync...`);
+    console.log(`📁 Root: ${rootDir}`);
+
+    if (!fs.existsSync(rootDir)) {
+        throw new Error(`Root directory not found: ${rootDir}`);
+    }
+
+    // 1. Scan disk
+    const { codeFiles, promptFiles } = scanProjectFiles(rootDir);
+    console.log(`📂 Disk: ${codeFiles.length} code, ${promptFiles.length} prompt files`);
+
+    // 2. Load existing DB pages for this project (for dirty checking)
+    const existingPages = await prisma.page.findMany({
+        where: { projectId },
+        select: { id: true, filePath: true, contentHash: true, fileMtime: true, promptFilePath: true }
+    });
+    const dbPageMap = new Map(existingPages.map(p => [p.filePath, p]));
+
+    // 3. Build disk file map: relPath -> { promptAbsPath, codeAbsPath }
+    const diskMap = new Map(); // relPath -> { promptAbsPath?, codeAbsPath? }
+    const promptFileSet = new Set(promptFiles);
+
+    for (const pf of promptFiles) {
+        const fileName = path.basename(pf);
+        // Skip MASTER prompts (table dropped)
+        const content = await readFileSafe(pf);
+        if (!content) continue;
+        if (fileName.includes('MASTER') || content.includes('MASTER NLP PROMPT')) continue;
+
+        const matchingCodeFile = deriveCodeFileFromPrompt(pf, codeFiles);
+        const relPath = path.relative(rootDir, matchingCodeFile).replace(/\\/g, '/');
+
+        diskMap.set(relPath, {
+            promptAbsPath: pf,
+            codeAbsPath: fs.existsSync(matchingCodeFile) ? matchingCodeFile : null,
+            promptContent: content
+        });
+    }
+
+    for (const cf of codeFiles) {
+        const relPath = path.relative(rootDir, cf).replace(/\\/g, '/');
+        if (!diskMap.has(relPath)) {
+            diskMap.set(relPath, { promptAbsPath: null, codeAbsPath: cf, promptContent: null });
+        } else {
+            // Code file exists for a prompt we already tracked — fill in codeAbsPath
+            const entry = diskMap.get(relPath);
+            if (!entry.codeAbsPath) entry.codeAbsPath = cf;
+        }
+    }
+
+    // 4. Determine dirty files (new, modified, removed)
+    const toUpsert = []; // relPaths that need processing
+    const toRemove = []; // DB page IDs that are gone from disk
+    let skippedCount = 0;
+
+    for (const [relPath, diskEntry] of diskMap) {
+        const dbPage = dbPageMap.get(relPath);
+
+        if (!dbPage) {
+            // New file — must process
+            toUpsert.push(relPath);
+            continue;
+        }
+
+        // Check if prompt file changed (mtime-based dirty check)
+        if (diskEntry.promptAbsPath) {
+            const stat = await statSafe(diskEntry.promptAbsPath);
+            if (stat) {
+                const diskMtime = stat.mtime;
+                const dbMtime = dbPage.fileMtime ? new Date(dbPage.fileMtime) : null;
+
+                if (!dbMtime || diskMtime > dbMtime) {
+                    // File modified — need to re-parse
+                    toUpsert.push(relPath);
+                    continue;
+                }
+
+                // Double-check with content hash if mtime matches
+                if (diskEntry.promptContent) {
+                    const hash = contentHash(diskEntry.promptContent);
+                    if (hash !== dbPage.contentHash) {
+                        toUpsert.push(relPath);
+                        continue;
+                    }
+                }
+            }
+        } else if (diskEntry.codeAbsPath) {
+            // Code-only file — check if code file mtime changed
+            const stat = await statSafe(diskEntry.codeAbsPath);
+            if (stat) {
+                const dbMtime = dbPage.fileMtime ? new Date(dbPage.fileMtime) : null;
+                if (!dbMtime || stat.mtime > dbMtime) {
+                    toUpsert.push(relPath);
+                    continue;
+                }
+            }
+        }
+
+        // File unchanged — skip
+        skippedCount++;
+    }
+
+    // Find removed files (in DB but not on disk)
+    for (const [relPath, dbPage] of dbPageMap) {
+        if (!diskMap.has(relPath)) {
+            toRemove.push(dbPage.id);
+        }
+    }
+
+    console.log(`🔍 ${toUpsert.length} dirty, ${skippedCount} unchanged, ${toRemove.length} removed`);
+
+    // 5. Remove stale pages
+    if (toRemove.length > 0) {
+        await prisma.page.deleteMany({ where: { id: { in: toRemove } } });
+        console.log(`🗑️  Deleted ${toRemove.length} stale pages`);
+    }
+
+    // 6. Upsert dirty files
+    const processed = [];
+
+    for (const relPath of toUpsert) {
+        const diskEntry = diskMap.get(relPath);
+        const fileName = path.basename(relPath);
+        const componentName = fileName.replace(/\.(js|jsx|ts|tsx)$/, '');
+        const fileCategory = classifyByRules(relPath);
+
+        if (diskEntry.promptContent) {
+            // Has prompt file — parse sections
+            const sections = parsePromptFile(diskEntry.promptContent);
+            const hash = contentHash(diskEntry.promptContent);
+            const stat = await statSafe(diskEntry.promptAbsPath);
+            const mtime = stat ? stat.mtime : null;
+
+            let totalLines = 0;
+            if (diskEntry.codeAbsPath) {
+                const codeContent = await readFileSafe(diskEntry.codeAbsPath);
+                if (codeContent) totalLines = codeContent.split(/\r\n|\r|\n/).length;
+            }
+
+            await upsertPage({
+                projectId,
+                relPath,
+                componentName,
+                totalLines,
+                purpose: `Prompt file for ${fileName}`,
+                category: fileCategory,
+                promptFilePath: diskEntry.promptAbsPath,
+                rawContent: diskEntry.promptContent,
+                hash,
+                mtime,
+                sections
+            });
+
+            processed.push({ file: fileName, type: 'page', target: relPath, sections: sections.length, category: fileCategory });
+        } else {
+            // Code-only file — no sections
+            const codeContent = await readFileSafe(diskEntry.codeAbsPath);
+            const totalLines = codeContent ? codeContent.split(/\r\n|\r|\n/).length : 0;
+            const stat = await statSafe(diskEntry.codeAbsPath);
+            const mtime = stat ? stat.mtime : null;
+            const hash = codeContent ? contentHash(codeContent) : null;
+            const folderPath = relPath.substring(0, relPath.lastIndexOf('/')) || 'root';
+
+            await upsertPage({
+                projectId,
+                relPath,
+                componentName,
+                totalLines,
                 purpose: `Source code: ${folderPath}/${fileName}`,
                 category: fileCategory,
                 promptFilePath: null,
                 rawContent: null,
-                projectId: projectId || null,
-                sections: {
-                    create: []
-                }
-            }
-        });
+                hash,
+                mtime,
+                sections: []
+            });
 
-        processedCodePaths.add(relPath);
-        processed.push({
-            file: fileName,
-            type: 'code',
-            target: relPath,
-            lines: totalLines,
-            sections: 0,
-            hasCode: true,
-            hasPrompt: false,
-            category: fileCategory
-        });
+            processed.push({ file: fileName, type: 'code', target: relPath, sections: 0, category: fileCategory });
+        }
     }
 
-    // Summary
-    const promptCount = processed.filter(p => p.type === 'page').length;
-    const codeOnlyCount = processed.filter(p => p.type === 'code').length;
-    const masterCount = processed.filter(p => p.type === 'master').length;
+    const elapsed = Date.now() - startTime;
     const catCounts = { FRONTEND: 0, BACKEND: 0, DATABASE: 0 };
     processed.forEach(p => { if (p.category) catCounts[p.category]++; });
 
-    console.log(`\n✅ Sync complete!`);
-    console.log(`   📝 ${promptCount} files with prompts`);
-    console.log(`   💻 ${codeOnlyCount} code-only files`);
-    console.log(`   🎯 ${masterCount} master prompts`);
-    console.log(`   📊 ${processed.length} total entries`);
-    console.log(`   🎨 Frontend: ${catCounts.FRONTEND} | ⚙️ Backend: ${catCounts.BACKEND} | 🗄️ Database: ${catCounts.DATABASE}\n`);
+    console.log(`✅ Sync done in ${elapsed}ms — ${processed.length} upserted, ${skippedCount} skipped, ${toRemove.length} removed`);
 
     return {
         success: true,
         processed,
         summary: {
-            total: processed.length,
-            withPrompts: promptCount,
-            codeOnly: codeOnlyCount,
-            masterPrompts: masterCount,
-            categories: catCounts
+            total: diskMap.size,
+            upserted: processed.length,
+            skipped: skippedCount,
+            removed: toRemove.length,
+            categories: catCounts,
+            elapsed: `${elapsed}ms`
         }
     };
 }
 
 // ==========================================
+// Targeted single-page re-seed (for use after generate/implement)
+// ==========================================
+async function seedSinglePage(rootDir, projectId, relFilePath) {
+    const absCodePath = path.join(rootDir, relFilePath.split('/').join(path.sep));
+    const absPromptPath = absCodePath.replace(/\.(js|jsx|ts|tsx)$/, '.txt');
+
+    const fileName = path.basename(relFilePath);
+    const componentName = fileName.replace(/\.(js|jsx|ts|tsx)$/, '');
+    const category = classifyByRules(relFilePath);
+
+    const promptContent = await readFileSafe(absPromptPath);
+    const codeContent = await readFileSafe(absCodePath);
+    const totalLines = codeContent ? codeContent.split(/\r\n|\r|\n/).length : 0;
+
+    let sections = [];
+    let hash = null;
+    let mtime = null;
+    let rawContent = null;
+    let promptFilePath = null;
+
+    if (promptContent) {
+        sections = parsePromptFile(promptContent);
+        hash = contentHash(promptContent);
+        const stat = await statSafe(absPromptPath);
+        mtime = stat ? stat.mtime : null;
+        rawContent = promptContent;
+        promptFilePath = absPromptPath;
+    } else if (codeContent) {
+        hash = contentHash(codeContent);
+        const stat = await statSafe(absCodePath);
+        mtime = stat ? stat.mtime : null;
+    }
+
+    const folderPath = relFilePath.substring(0, relFilePath.lastIndexOf('/')) || 'root';
+
+    await upsertPage({
+        projectId,
+        relPath: relFilePath,
+        componentName,
+        totalLines,
+        purpose: promptContent ? `Prompt file for ${fileName}` : `Source code: ${folderPath}/${fileName}`,
+        category,
+        promptFilePath,
+        rawContent,
+        hash,
+        mtime,
+        sections
+    });
+
+    return { success: true, filePath: relFilePath, sections: sections.length };
+}
+
+// ==========================================
 // POST seed database - Sync All Prompts
-// Accepts optional projectId to scope the sync
 // ==========================================
 router.post('/', async (req, res) => {
     try {
@@ -625,7 +699,6 @@ router.post('/', async (req, res) => {
             });
         }
 
-        // Determine root directory from DB
         const resolved = await resolveProjectRoot({ projectId });
         const rootDir = resolved.rootDir;
 
@@ -643,7 +716,6 @@ router.post('/', async (req, res) => {
 
 // ==========================================
 // GET /check-sync - Check if root folder is in sync with DB
-// Supports optional projectId query parameter
 // ==========================================
 router.get('/check-sync', async (req, res) => {
     try {
@@ -658,7 +730,6 @@ router.get('/check-sync', async (req, res) => {
             });
         }
 
-        // Determine root directory from DB
         const resolved = await resolveProjectRoot({ projectId });
         const rootDir = resolved.rootDir;
 
@@ -680,80 +751,48 @@ router.get('/check-sync', async (req, res) => {
             });
         }
 
-        // Scan current files on disk
         const { codeFiles, promptFiles } = scanProjectFiles(rootDir);
 
-        // Get all disk file paths (relative)
-        const diskPromptPaths = new Set();
+        const diskPaths = new Set();
         for (const pf of promptFiles) {
-            const fileName = path.basename(pf);
-            if (fileName.includes('MASTER') || readFileSafe(pf)?.includes('MASTER NLP PROMPT')) {
-                continue; // skip master prompts for this comparison
-            }
-            // Derive the code file path that would be stored in DB
             const matchingCodeFile = deriveCodeFileFromPrompt(pf, codeFiles);
-            const relPath = path.relative(rootDir, matchingCodeFile).replace(/\\/g, '/');
-            diskPromptPaths.add(relPath);
+            diskPaths.add(path.relative(rootDir, matchingCodeFile).replace(/\\/g, '/'));
         }
-
-        const diskCodePaths = new Set();
         for (const cf of codeFiles) {
-            const relPath = path.relative(rootDir, cf).replace(/\\/g, '/');
-            // Skip root-level config files (same logic as seed)
-            const parts = relPath.split('/');
-            if (parts.length === 1) {
-                const rootFileName = parts[0].toLowerCase();
-                if (rootFileName.includes('config') || rootFileName.includes('env') || rootFileName === 'jsconfig.json') {
-                    continue;
-                }
-            }
-            diskCodePaths.add(relPath);
+            diskPaths.add(path.relative(rootDir, cf).replace(/\\/g, '/'));
         }
 
-        const allDiskPaths = new Set([...diskPromptPaths, ...diskCodePaths]);
-
-        // Get all DB file paths (scoped by projectId if provided)
-        const dbWhere = projectId ? { projectId } : {};
         const dbPages = await prisma.page.findMany({
-            where: dbWhere,
-            select: { filePath: true, updatedAt: true, promptFilePath: true }
+            where: { projectId },
+            select: { filePath: true, fileMtime: true, promptFilePath: true }
         });
-        const dbPaths = new Set(dbPages.map(p => p.filePath));
+        const dbPaths = new Map(dbPages.map(p => [p.filePath, p]));
 
-        // Compare
-        const newFiles = []; // on disk but not in DB
-        const removedFiles = []; // in DB but not on disk
-        const modifiedFiles = []; // on disk AND in DB but prompt file changed
+        const newFiles = [];
+        const removedFiles = [];
+        const modifiedFiles = [];
 
-        // Check for new files on disk not in DB
-        for (const diskPath of allDiskPaths) {
+        for (const diskPath of diskPaths) {
             if (!dbPaths.has(diskPath)) {
                 newFiles.push(diskPath);
             }
         }
 
-        // Check for files in DB no longer on disk
-        for (const dbPath of dbPaths) {
-            if (!allDiskPaths.has(dbPath)) {
+        for (const [dbPath] of dbPaths) {
+            if (!diskPaths.has(dbPath)) {
                 removedFiles.push(dbPath);
             }
         }
 
-        // Check for modified prompt files (compare file mtime vs DB updatedAt)
-        for (const dbPage of dbPages) {
-            if (dbPage.promptFilePath && allDiskPaths.has(dbPage.filePath)) {
-                try {
-                    if (fs.existsSync(dbPage.promptFilePath)) {
-                        const fileStat = fs.statSync(dbPage.promptFilePath);
-                        const fileMtime = fileStat.mtime;
-                        const dbUpdated = new Date(dbPage.updatedAt);
-                        // If the file on disk was modified after the DB record
-                        if (fileMtime > dbUpdated) {
-                            modifiedFiles.push(dbPage.filePath);
-                        }
+        for (const [filePath, dbPage] of dbPaths) {
+            if (!diskPaths.has(filePath)) continue;
+            if (dbPage.promptFilePath) {
+                const stat = await statSafe(dbPage.promptFilePath);
+                if (stat) {
+                    const dbMtime = dbPage.fileMtime ? new Date(dbPage.fileMtime) : null;
+                    if (!dbMtime || stat.mtime > dbMtime) {
+                        modifiedFiles.push(filePath);
                     }
-                } catch (e) {
-                    // Ignore stat errors
                 }
             }
         }
@@ -765,33 +804,20 @@ router.get('/check-sync', async (req, res) => {
         if (inSync) {
             message = 'Everything is in sync';
         } else {
-            const msgParts = [];
-            if (newFiles.length > 0) msgParts.push(`${newFiles.length} new file(s)`);
-            if (modifiedFiles.length > 0) msgParts.push(`${modifiedFiles.length} modified file(s)`);
-            if (removedFiles.length > 0) msgParts.push(`${removedFiles.length} removed file(s)`);
-            message = `Root folder has changes: ${msgParts.join(', ')}`;
+            const parts = [];
+            if (newFiles.length > 0) parts.push(`${newFiles.length} new`);
+            if (modifiedFiles.length > 0) parts.push(`${modifiedFiles.length} modified`);
+            if (removedFiles.length > 0) parts.push(`${removedFiles.length} removed`);
+            message = `Changes: ${parts.join(', ')}`;
         }
 
-        res.json({
-            success: true,
-            inSync,
-            totalChanges,
-            message,
-            details: {
-                newFiles,
-                removedFiles,
-                modifiedFiles
-            }
-        });
+        res.json({ success: true, inSync, totalChanges, message, details: { newFiles, removedFiles, modifiedFiles } });
     } catch (error) {
         console.error('Check-sync error:', error);
-        res.status(500).json({
-            success: false,
-            inSync: true, // Default to in-sync on error to not show false warnings
-            message: 'Failed to check sync status'
-        });
+        res.status(500).json({ success: false, inSync: true, message: 'Failed to check sync status' });
     }
 });
 
 module.exports = router;
 module.exports.seedProject = seedProject;
+module.exports.seedSinglePage = seedSinglePage;

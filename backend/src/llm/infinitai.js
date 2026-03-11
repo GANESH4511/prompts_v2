@@ -13,6 +13,7 @@
 
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 1500;
+const DEFAULT_TIMEOUT_MS = 60000; // 60s timeout for LLM calls
 
 function getConfig() {
     const apiKey = process.env.INFINITAI_API_KEY;
@@ -38,59 +39,67 @@ function getConfig() {
 async function callInfinitAI({ systemPrompt, userPrompt, config }) {
     const url = `${config.baseUrl}/chat/completions`;
 
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${config.apiKey}`
-        },
-        body: JSON.stringify({
-            model: config.model,
-            messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: userPrompt }
-            ],
-            temperature: 0.3,
-            max_tokens: 100000
-        })
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
 
-    if (!response.ok) {
-        const errorBody = await response.text().catch(() => 'No error body');
-        const status = response.status;
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${config.apiKey}`
+            },
+            signal: controller.signal,
+            body: JSON.stringify({
+                model: config.model,
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt }
+                ],
+                temperature: 0.3,
+                max_tokens: 100000
+            })
+        });
 
-        if (status === 429) {
+        if (!response.ok) {
+            const errorBody = await response.text().catch(() => 'No error body');
+            const status = response.status;
+
+            if (status === 429) {
+                throw new Error(
+                    `API rate limit exceeded. Please retry after a moment. ` +
+                    `You may need to check your InfinitAI API quota.`
+                );
+            }
+
+            if (status === 401 || status === 403) {
+                throw new Error(
+                    `InfinitAI API authentication failed (${status}). ` +
+                    `Please check your INFINITAI_API_KEY in the .env file.`
+                );
+            }
+
             throw new Error(
-                `API rate limit exceeded. Please retry after a moment. ` +
-                `You may need to check your InfinitAI API quota.`
+                `InfinitAI API error (${status}): ${errorBody.substring(0, 300)}`
             );
         }
 
-        if (status === 401 || status === 403) {
-            throw new Error(
-                `InfinitAI API authentication failed (${status}). ` +
-                `Please check your INFINITAI_API_KEY in the .env file.`
-            );
+        const data = await response.json();
+
+        if (!data.choices || data.choices.length === 0) {
+            throw new Error('InfinitAI returned no choices in the response.');
         }
 
-        throw new Error(
-            `InfinitAI API error (${status}): ${errorBody.substring(0, 300)}`
-        );
+        const content = data.choices[0].message?.content;
+
+        if (!content || !content.trim()) {
+            throw new Error('InfinitAI returned an empty response.');
+        }
+
+        return content.trim();
+    } finally {
+        clearTimeout(timeout);
     }
-
-    const data = await response.json();
-
-    if (!data.choices || data.choices.length === 0) {
-        throw new Error('InfinitAI returned no choices in the response.');
-    }
-
-    const content = data.choices[0].message?.content;
-
-    if (!content || !content.trim()) {
-        throw new Error('InfinitAI returned an empty response.');
-    }
-
-    return content.trim();
 }
 
 /**

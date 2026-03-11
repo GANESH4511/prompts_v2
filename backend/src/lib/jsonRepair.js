@@ -78,13 +78,39 @@ function parseWithRepair(raw) {
 function convertBackticksToStrings(json) {
     let result = '';
     let i = 0;
+    let inString = false;
+    let escapeNext = false;
 
     while (i < json.length) {
-        if (json[i] === '`') {
-            // Check if preceded by : (value position) — e.g. "key": `value`
-            const before = result.trimEnd();
-            const isValuePosition = before.endsWith(':');
+        const ch = json[i];
 
+        // Track escape sequences inside JSON strings
+        if (escapeNext) {
+            escapeNext = false;
+            result += ch;
+            i++;
+            continue;
+        }
+
+        // Inside a JSON double-quoted string — pass through everything
+        if (inString) {
+            if (ch === '\\') {
+                escapeNext = true;
+            } else if (ch === '"') {
+                inString = false;
+            }
+            result += ch;
+            i++;
+            continue;
+        }
+
+        // Outside a string — handle quotes and backticks
+        if (ch === '"') {
+            inString = true;
+            result += ch;
+            i++;
+        } else if (ch === '`') {
+            // Backtick outside a JSON string — LLM used template literal as value
             // Find matching closing backtick
             let end = i + 1;
             while (end < json.length && json[end] !== '`') {
@@ -92,7 +118,6 @@ function convertBackticksToStrings(json) {
             }
 
             if (end < json.length) {
-                // Found closing backtick — convert to JSON string
                 const content = json.substring(i + 1, end);
                 const escaped = content
                     .replace(/\\/g, '\\\\')
@@ -115,7 +140,7 @@ function convertBackticksToStrings(json) {
                 i = json.length;
             }
         } else {
-            result += json[i];
+            result += ch;
             i++;
         }
     }

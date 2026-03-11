@@ -7,141 +7,9 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// File category classification
-enum FileCategory {
-  FRONTEND
-  BACKEND
-  DATABASE
-}
-
-// Pages/Files table - stores information about each code file
-model Page {
-  id            String       @id @default(cuid())
-  filePath      String
-  componentName String
-  totalLines    Int
-  purpose       String
-  category      FileCategory @default(BACKEND)
-  promptFilePath String?   // Path to the source .txt file
-  rawContent    String?   // Store the full original text content
-  projectId     String?   // Link to project for multi-project isolation
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-
-  project       Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  sections      Section[]
-  stateVars     StateVar[]
-  functions     Function[]
-  dependencies  Dependency[] @relation("FromPage")
-  dependents    Dependency[] @relation("ToPage")
-
-  @@unique([projectId, filePath])
-  @@map("pages")
-}
-
-// Sections within a file
-model Section {
-  id        String   @id @default(cuid())
-  pageId    String
-  name      String
-  startLine Int
-  endLine   Int
-  purpose   String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  page    Page     @relation(fields: [pageId], references: [id], onDelete: Cascade)
-  prompts Prompt[]
-
-  @@map("sections")
-}
-
-// Prompts/Modification templates for each section
-// promptType: NLP (user-friendly) or DEVELOPER (technical)
-model Prompt {
-  id           String     @id @default(cuid())
-  sectionId    String
-  template     String
-  example      String?
-  description  String?
-  lineNumber   Int        @default(0)
-  promptType   PromptType @default(NLP)
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
-
-  section Section @relation(fields: [sectionId], references: [id], onDelete: Cascade)
-
-  @@map("prompts")
-}
-
-// Enum for prompt types
-enum PromptType {
-  NLP        // User-friendly, natural language prompts
-  DEVELOPER  // Technical, concise developer prompts
-}
-
-// State variables in a file
-model StateVar {
-  id          String   @id @default(cuid())
-  pageId      String
-  name        String
-  line        Int
-  type        String?
-  description String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  page Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
-
-  @@map("state_vars")
-}
-
-// Functions in a file
-model Function {
-  id         String   @id @default(cuid())
-  pageId     String
-  name       String
-  startLine  Int
-  endLine    Int
-  purpose    String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  page Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
-
-  @@map("functions")
-}
-
-// Dependencies between files
-model Dependency {
-  id           String   @id @default(cuid())
-  fromPageId   String
-  toPageId     String
-  relationship String
-  createdAt    DateTime @default(now())
-
-  fromPage Page @relation("FromPage", fields: [fromPageId], references: [id], onDelete: Cascade)
-  toPage   Page @relation("ToPage", fields: [toPageId], references: [id], onDelete: Cascade)
-
-  @@map("dependencies")
-}
-
-// Master NLP prompt template for a page
-model MasterPrompt {
-  id              String   @id @default(cuid())
-  pageFilePath    String
-  nlpInstruction  String
-  sectionsSummary String
-  queryExamples   String
-  projectId       String?  // Link to project for multi-project isolation
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  project         Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
-
-  @@unique([projectId, pageFilePath])
-  @@map("master_prompts")
-}
+// ==========================================
+// Core tables (genuine persistent state)
+// ==========================================
 
 // User model for authentication
 model User {
@@ -171,9 +39,10 @@ model Project {
 
   user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   pages         Page[]
-  masterPrompts MasterPrompt[]
+  implementHistory ImplementHistory[]
 
   @@unique([userId, path])
+  @@index([userId, isActive])
   @@map("projects")
 }
 
@@ -188,5 +57,85 @@ model ImplementHistory {
   status        String   @default("applied") // "applied", "reverted"
   createdAt     DateTime @default(now())
 
+  project       Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, status])
   @@map("implement_history")
+}
+
+// ==========================================
+// Cache tables (disposable, rebuilt from filesystem)
+// ==========================================
+
+// File category classification
+enum FileCategory {
+  FRONTEND
+  BACKEND
+  DATABASE
+}
+
+// Enum for prompt types
+enum PromptType {
+  NLP        // User-friendly, natural language prompts
+  DEVELOPER  // Technical, concise developer prompts
+}
+
+// FileIndex / Page cache — lightweight file metadata + mtime for dirty checking
+model Page {
+  id            String       @id @default(cuid())
+  filePath      String
+  componentName String
+  totalLines    Int
+  purpose       String
+  category      FileCategory @default(BACKEND)
+  promptFilePath String?     // Relative path to the source .txt file
+  rawContent    String?      // Full original text content (cache)
+  contentHash   String?      // SHA-256 hash of prompt file for dirty checking
+  fileMtime     DateTime?    // Last modified time of prompt file on disk
+  projectId     String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  project       Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sections      Section[]
+
+  @@unique([projectId, filePath])
+  @@index([projectId])
+  @@map("pages")
+}
+
+// Section cache — parsed sections within a prompt file
+model Section {
+  id        String   @id @default(cuid())
+  pageId    String
+  name      String
+  startLine Int
+  endLine   Int
+  purpose   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  page    Page     @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  prompts Prompt[]
+
+  @@index([pageId])
+  @@map("sections")
+}
+
+// Prompt cache — individual prompt templates per section
+model Prompt {
+  id           String     @id @default(cuid())
+  sectionId    String
+  template     String
+  example      String?
+  description  String?
+  lineNumber   Int        @default(0)
+  promptType   PromptType @default(NLP)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  section Section @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+
+  @@index([sectionId])
+  @@map("prompts")
 }

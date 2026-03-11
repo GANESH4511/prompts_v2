@@ -19,12 +19,13 @@
  */
 
 const express = require('express');
-const fs = require('fs');
+const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { generatePrompt, loadTemplate, getLatestVersion } = require('../llm');
 const { prisma } = require('../lib/prisma');
 const { resolveProjectRoot } = require('../lib/resolveProject');
+const { seedSinglePage } = require('./seed');
 
 const router = express.Router();
 
@@ -63,34 +64,10 @@ function buildPromptFileContent({ fileName, nlpOutput, devOutput, nlpVersion, de
 }
 
 /**
- * Trigger the existing /api/seed pipeline internally.
- * Makes an HTTP call to the seed endpoint.
+ * Helper to check if file exists (async)
  */
-async function triggerSeed(projectId) {
-    const port = process.env.PORT || 5000;
-    const seedUrl = `http://localhost:${port}/api/seed`;
-
-    console.log(`  🔄 Triggering seed for project: ${projectId || 'default'}...`);
-
-    const response = await fetch(seedUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId })
-    });
-
-    if (!response.ok) {
-        const body = await response.text();
-        throw new Error(`Seed failed (${response.status}): ${body}`);
-    }
-
-    const result = await response.json();
-
-    if (!result.success) {
-        throw new Error(`Seed returned failure: ${JSON.stringify(result)}`);
-    }
-
-    console.log('  ✅ Seed completed successfully');
-    return result;
+async function fileExists(p) {
+    try { await fs.access(p); return true; } catch { return false; }
 }
 
 router.post('/', async (req, res) => {
@@ -135,7 +112,7 @@ router.post('/', async (req, res) => {
             absoluteSourcePath = path.join(resolvedRoot, filePath.split('/').join(path.sep));
         }
 
-        if (!fs.existsSync(absoluteSourcePath)) {
+        if (!(await fileExists(absoluteSourcePath))) {
             return res.status(404).json({
                 success: false,
                 error: `Source file not found: ${filePath}`,
@@ -143,7 +120,7 @@ router.post('/', async (req, res) => {
             });
         }
 
-        const sourceCode = fs.readFileSync(absoluteSourcePath, 'utf-8');
+        const sourceCode = await fs.readFile(absoluteSourcePath, 'utf-8');
         if (!sourceCode.trim()) {
             return res.status(400).json({
                 success: false,
@@ -164,29 +141,20 @@ router.post('/', async (req, res) => {
         const devTemplate = loadTemplate('developer', devVersion);
         console.log(`  📋 Developer template: v${devVersion} loaded`);
 
-        // --- Step 4: Generate NLP prompt ---
-        console.log(`  🤖 Generating NLP prompt...`);
-        const nlpOutput = await generatePrompt({
-            template: nlpTemplate.content,
-            sourceCode,
-            metadata: {
-                templateType: 'nlp',
-                templateVersion: nlpVersion,
-                filePath
-            }
-        });
-
-        // --- Step 5: Generate Developer prompt ---
-        console.log(`  🤖 Generating Developer prompt...`);
-        const devOutput = await generatePrompt({
-            template: devTemplate.content,
-            sourceCode,
-            metadata: {
-                templateType: 'developer',
-                templateVersion: devVersion,
-                filePath
-            }
-        });
+        // --- Step 4+5: Generate NLP and Developer prompts in parallel ---
+        console.log(`  🤖 Generating NLP + Developer prompts in parallel...`);
+        const [nlpOutput, devOutput] = await Promise.all([
+            generatePrompt({
+                template: nlpTemplate.content,
+                sourceCode,
+                metadata: { templateType: 'nlp', templateVersion: nlpVersion, filePath }
+            }),
+            generatePrompt({
+                template: devTemplate.content,
+                sourceCode,
+                metadata: { templateType: 'developer', templateVersion: devVersion, filePath }
+            })
+        ]);
 
         // --- Step 6: Combine into .txt using existing delimiters ---
         const fileName = path.basename(absoluteSourcePath);
@@ -205,27 +173,25 @@ router.post('/', async (req, res) => {
         const tmpFilePath = promptFilePath + '.tmp';
 
         // Log whether this is a new prompt or an overwrite
-        if (fs.existsSync(promptFilePath)) {
-            console.log(`  📝 Existing prompt found — will overwrite: ${promptFilePath}`);
-        } else {
-            console.log(`  🆕 No existing prompt — will create new: ${promptFilePath}`);
-        }
+        const exists = await fileExists(promptFilePath);
+        console.log(exists
+            ? `  📝 Existing prompt — will overwrite: ${promptFilePath}`
+            : `  🆕 Creating new prompt: ${promptFilePath}`);
 
         // Clean up any stale .tmp file
-        if (fs.existsSync(tmpFilePath)) {
-            fs.unlinkSync(tmpFilePath);
-        }
+        try { await fs.unlink(tmpFilePath); } catch {}
 
         // --- Step 8: Write new prompt file (atomic: write tmp then rename) ---
-        fs.writeFileSync(tmpFilePath, promptContent, 'utf-8');
-        fs.renameSync(tmpFilePath, promptFilePath);
+        await fs.writeFile(tmpFilePath, promptContent, 'utf-8');
+        await fs.rename(tmpFilePath, promptFilePath);
 
         const outputHash = crypto.createHash('sha256').update(promptContent).digest('hex').substring(0, 12);
         console.log(`  💾 Written: ${promptFilePath}`);
         console.log(`  📊 Output: ${promptContent.length} chars, hash=${outputHash}`);
 
-        // --- Step 9: Trigger existing /api/seed to sync database ---
-        const seedResult = await triggerSeed(effectiveProjectId);
+        // --- Step 9: Targeted single-page re-seed (direct fn call, no HTTP) ---
+        const relFilePath = path.relative(resolvedRoot, absoluteSourcePath).replace(/\\/g, '/');
+        const seedResult = await seedSinglePage(resolvedRoot, effectiveProjectId, relFilePath);
 
         // --- Step 10: Respond ---
         const elapsed = Date.now() - startTime;
@@ -245,7 +211,7 @@ router.post('/', async (req, res) => {
             provider: (process.env.LLM_PROVIDER || 'infinitai').toLowerCase(),
             model: process.env.INFINITAI_MODEL || 'meta-llama/Llama-3.2-11B-Vision-Instruct',
             elapsed: `${elapsed}ms`,
-            seedResult: seedResult.summary || null
+            seedResult: seedResult || null
         });
 
     } catch (error) {
@@ -259,9 +225,7 @@ router.post('/', async (req, res) => {
                 const sourceDir = path.dirname(filePath);
                 const baseName = path.basename(filePath, path.extname(filePath));
                 const tmpPath = path.join(sourceDir, `${baseName}.txt.tmp`);
-                if (fs.existsSync(tmpPath)) {
-                    fs.unlinkSync(tmpPath);
-                }
+                await fs.unlink(tmpPath).catch(() => {});
             }
         } catch (cleanupErr) {
             // Ignore cleanup errors

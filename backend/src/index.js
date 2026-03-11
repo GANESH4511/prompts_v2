@@ -2,6 +2,7 @@ const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const { authenticateToken, optionalAuth } = require('./middleware/auth');
 
 const pagesRouter = require('./routes/pages');
@@ -23,6 +24,7 @@ app.use(cors({
     origin: ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001'],
     credentials: true
 }));
+app.use(compression());
 app.use(express.json({ limit: '10mb' }));
 
 // Request logging middleware
