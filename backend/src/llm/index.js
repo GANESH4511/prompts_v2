@@ -7,11 +7,13 @@
  * 
  * Contract:
  *   generatePrompt({ template, sourceCode, metadata }) -> string
+ *   generatePromptStream({ template, sourceCode, metadata, onChunk }) -> string
  */
 
-const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
+
+// Re-export template helpers so existing callers still work via require('../llm')
+const { loadTemplate, getLatestVersion } = require('../lib/templateEngine');
 
 // Provider registry - add new providers here
 const PROVIDERS = {
@@ -19,10 +21,7 @@ const PROVIDERS = {
     openai: () => require('./openai')
 };
 
-// In-memory template cache: key = "type/version" -> { content, version, type }
-const templateCache = new Map();
-// Latest version cache: key = templateType -> version string
-const latestVersionCache = new Map();
+const DEFAULT_TIMEOUT_MS = 300000; // 5 minute default
 
 /**
  * Get the active LLM provider based on LLM_PROVIDER env var.
@@ -41,92 +40,83 @@ function getProvider() {
 }
 
 /**
- * Load a template file from the templates directory.
- * Cached in memory after first read.
- * Returns { content, version, type }
+ * Core contract: generatePrompt (non-streaming, with timeout)
  */
-function loadTemplate(templateType, version) {
-    const cacheKey = `${templateType}/${version}`;
-    if (templateCache.has(cacheKey)) {
-        return templateCache.get(cacheKey);
-    }
-
-    const templateDir = path.resolve(__dirname, '../../templates', templateType);
-    const templatePath = path.join(templateDir, `${version}.txt`);
-
-    if (!fs.existsSync(templatePath)) {
-        throw new Error(`Template not found: ${templatePath}`);
-    }
-
-    const content = fs.readFileSync(templatePath, 'utf-8');
-    const entry = { content, version, type: templateType };
-    templateCache.set(cacheKey, entry);
-    return entry;
-}
-
-/**
- * Get the latest version available for a template type.
- * Cached in memory after first directory scan.
- */
-function getLatestVersion(templateType) {
-    if (latestVersionCache.has(templateType)) {
-        return latestVersionCache.get(templateType);
-    }
-
-    const templateDir = path.resolve(__dirname, '../../templates', templateType);
-
-    if (!fs.existsSync(templateDir)) {
-        throw new Error(`Template directory not found: ${templateDir}`);
-    }
-
-    const files = fs.readdirSync(templateDir)
-        .filter(f => f.endsWith('.txt'))
-        .map(f => f.replace('.txt', ''))
-        .sort()
-        .reverse();
-
-    if (files.length === 0) {
-        throw new Error(`No templates found in: ${templateDir}`);
-    }
-
-    latestVersionCache.set(templateType, files[0]);
-    return files[0];
-}
-
-/**
- * Core contract: generatePrompt
- * 
- * @param {Object} params
- * @param {string} params.template - The template content to use as system prompt
- * @param {string} params.sourceCode - The source code to analyze
- * @param {Object} params.metadata - Metadata for logging (templateType, templateVersion, filePath)
- * @returns {string} - Raw generated prompt text
- */
-async function generatePrompt({ template, sourceCode, metadata = {} }) {
+async function generatePrompt({ template, sourceCode, metadata = {}, timeoutMs }) {
     const provider = getProvider();
     const providerName = (process.env.LLM_PROVIDER || 'infinitai').toLowerCase();
     const modelName = process.env.INFINITAI_MODEL || 'meta-llama/Llama-3.2-11B-Vision-Instruct';
 
-    // Compute hashes for traceability
     const sourceHash = crypto.createHash('sha256').update(sourceCode).digest('hex').substring(0, 12);
 
     console.log(`  🤖 LLM Call: provider=${providerName}, model=${modelName}`);
     console.log(`  📋 Template: type=${metadata.templateType || 'unknown'}, version=${metadata.templateVersion || 'unknown'}`);
     console.log(`  📄 Source: ${metadata.filePath || 'unknown'}, hash=${sourceHash}`);
 
+    const timeout = timeoutMs || DEFAULT_TIMEOUT_MS;
     const startTime = Date.now();
-    const result = await provider.generate({ template, sourceCode });
+
+    const resultPromise = provider.generate({ template, sourceCode });
+
+    // Wrap with timeout
+    const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`LLM call timed out after ${timeout}ms`)), timeout)
+    );
+
+    const result = await Promise.race([resultPromise, timeoutPromise]);
     const elapsed = Date.now() - startTime;
 
     const outputHash = crypto.createHash('sha256').update(result).digest('hex').substring(0, 12);
-
     console.log(`  ✅ Generated in ${elapsed}ms, outputHash=${outputHash}, length=${result.length}`);
+
+    return result;
+}
+
+/**
+ * Streaming contract: generatePromptStream
+ * Calls the provider's streaming API and invokes onChunk for each text chunk.
+ * Returns the full accumulated text.
+ * 
+ * @param {Object} params
+ * @param {string} params.template - System prompt
+ * @param {string} params.sourceCode - User prompt content
+ * @param {Object} params.metadata - Logging metadata
+ * @param {function} params.onChunk - Called with each text chunk as it arrives
+ * @returns {string} Full accumulated response text
+ */
+async function generatePromptStream({ template, sourceCode, metadata = {}, onChunk }) {
+    const provider = getProvider();
+    const providerName = (process.env.LLM_PROVIDER || 'infinitai').toLowerCase();
+    const modelName = process.env.INFINITAI_MODEL || 'meta-llama/Llama-3.2-11B-Vision-Instruct';
+
+    const sourceHash = crypto.createHash('sha256').update(sourceCode).digest('hex').substring(0, 12);
+
+    console.log(`  🤖 LLM Stream: provider=${providerName}, model=${modelName}`);
+    console.log(`  📋 Template: type=${metadata.templateType || 'unknown'}, version=${metadata.templateVersion || 'unknown'}`);
+    console.log(`  📄 Source: ${metadata.filePath || 'unknown'}, hash=${sourceHash}`);
+
+    const startTime = Date.now();
+
+    if (typeof provider.generateStream !== 'function') {
+        // Fallback: provider doesn't support streaming, use batch and emit all at once
+        console.log(`  ⚠️ Provider ${providerName} has no streaming support, falling back to batch`);
+        const result = await provider.generate({ template, sourceCode });
+        if (onChunk) onChunk(result);
+        return result;
+    }
+
+    const result = await provider.generateStream({ template, sourceCode, onChunk });
+    const elapsed = Date.now() - startTime;
+
+    const outputHash = crypto.createHash('sha256').update(result).digest('hex').substring(0, 12);
+    console.log(`  ✅ Streamed in ${elapsed}ms, outputHash=${outputHash}, length=${result.length}`);
 
     return result;
 }
 
 module.exports = {
     generatePrompt,
+    generatePromptStream,
     loadTemplate,
     getLatestVersion,
     getProvider

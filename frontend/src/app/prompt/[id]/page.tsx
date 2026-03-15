@@ -80,7 +80,10 @@ const Sidebar = ({
     isOverviewActive,
     page,
     collapsed,
-    onToggle
+    onToggle,
+    changeHistory,
+    onHistoryClick,
+    onHistoryDelete
 }: {
     activeCategory: 'FRONTEND' | 'BACKEND' | 'DATABASE' | null,
     onCategoryChange: (cat: 'FRONTEND' | 'BACKEND' | 'DATABASE' | null) => void,
@@ -88,7 +91,10 @@ const Sidebar = ({
     isOverviewActive: boolean,
     page: Page,
     collapsed: boolean,
-    onToggle: () => void
+    onToggle: () => void,
+    changeHistory: Array<{ id: string; changeText: string; changeType: string; status: string; createdAt: string; hasPlan: boolean }>,
+    onHistoryClick: (text: string) => void,
+    onHistoryDelete: (id: string) => void
 }) => {
     const categories = [
         { id: 'FRONTEND' as const, label: 'Frontend', icon: '🖥️' },
@@ -96,18 +102,15 @@ const Sidebar = ({
         { id: 'DATABASE' as const, label: 'Database', icon: '🗄️' }
     ]
 
-    // Count logic blocks (functions)
-    const logicBlocks = page.functions?.length || 0
-
     return (
         <aside className={`prompt-sidebar ${collapsed ? 'collapsed' : ''}`}>
             {/* Dashboard Header */}
             <div className="sidebar-header">
-                <button className="sidebar-menu-btn" onClick={onToggle} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
+                <div className="sidebar-logo-icon">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M3 12h18M3 6h18M3 18h18" />
+                        <path d="M16 18l6-6-6-6M8 6l-6 6 6 6" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
-                </button>
+                </div>
                 {!collapsed && <span className="sidebar-title">DASHBOARD</span>}
             </div>
 
@@ -136,17 +139,38 @@ const Sidebar = ({
                         </button>
                     </div>
 
-                    {/* File Stats */}
-                    <div className="sidebar-section">
-                        <div className="sidebar-section-label">FILE STATS</div>
-                        <div className="sidebar-stat-card">
-                            <div className="stat-label">LINES OF CODE</div>
-                            <div className="stat-value">{page.totalLines}</div>
-                        </div>
-                        <div className="sidebar-stat-card">
-                            <div className="stat-label">LOGIC BLOCKS</div>
-                            <div className="stat-value">{logicBlocks}</div>
-                        </div>
+                    {/* Change History */}
+                    <div className="sidebar-section sidebar-history-section">
+                        <div className="sidebar-section-label">CHANGE HISTORY</div>
+                        {changeHistory.length === 0 ? (
+                            <div className="sidebar-history-empty">No changes yet</div>
+                        ) : (
+                            <div className="sidebar-history-list">
+                                {changeHistory.map(ch => (
+                                    <div
+                                        key={ch.id}
+                                        className={`sidebar-history-item ${ch.status}`}
+                                        onClick={() => onHistoryClick(ch.changeText)}
+                                        title={ch.changeText}
+                                    >
+                                        <div className="sidebar-history-text">
+                                            {ch.changeText.substring(0, 60)}{ch.changeText.length > 60 ? '...' : ''}
+                                        </div>
+                                        <div className="sidebar-history-meta">
+                                            <span className={`sidebar-history-status ${ch.status}`}>{ch.status.toUpperCase()}</span>
+                                            <span className="sidebar-history-date">{new Date(ch.createdAt).toLocaleDateString()}</span>
+                                            <button
+                                                className="sidebar-history-delete"
+                                                onClick={(e) => { e.stopPropagation(); onHistoryDelete(ch.id); }}
+                                                title="Delete this change"
+                                            >
+                                                🗑️
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 </>
             )}
@@ -219,6 +243,20 @@ export default function PromptDetailPage() {
     const [isUndoing, setIsUndoing] = useState(false)
     const [showImplementBanner, setShowImplementBanner] = useState(false)
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number; visible: boolean }>({ x: 0, y: 0, visible: false })
+
+    // Unified Implement Panel states (bottom panel)
+    const [showImplementPanel, setShowImplementPanel] = useState(false)
+    const [implementPanelMinimized, setImplementPanelMinimized] = useState(false)
+    const [changesText, setChangesText] = useState<string>('')
+    const [streamingOutput, setStreamingOutput] = useState<string>('')
+    const [isStreaming, setIsStreaming] = useState(false)
+    const [retryAttempt, setRetryAttempt] = useState<number>(0)
+
+    // Change history states (sidebar)
+    const [changeHistory, setChangeHistory] = useState<Array<{ id: string; changeText: string; changeType: string; status: string; createdAt: string; hasPlan: boolean }>>([])
+
+    // Overflow menu state
+    const [showOverflowMenu, setShowOverflowMenu] = useState(false)
 
     useEffect(() => {
         const token = getAccessToken()
@@ -378,24 +416,62 @@ export default function PromptDetailPage() {
     }
 
     // ==========================================
-    // IMPLEMENT FEATURE
+    // IMPLEMENT FEATURE (Streaming SSE)
     // ==========================================
 
-    // Generate implementation preview (diff)
+    // Fetch change request history for this page
+    const fetchChangeHistory = useCallback(async () => {
+        if (!page) return
+        try {
+            const res = await fetch(`${API_URL}/api/implement/changes/${page.id}`)
+            const data = await res.json()
+            if (data.success) {
+                setChangeHistory(data.changes || [])
+            }
+        } catch (err) {
+            console.error('Change history fetch error:', err)
+        }
+    }, [page])
+
+    // Delete a change history item
+    const deleteChangeHistory = useCallback(async (id: string) => {
+        try {
+            const res = await fetch(`${API_URL}/api/implement/changes/${id}`, { method: 'DELETE' })
+            const data = await res.json()
+            if (data.success) {
+                setChangeHistory(prev => prev.filter(c => c.id !== id))
+            }
+        } catch (err) {
+            console.error('Change history delete error:', err)
+        }
+    }, [])
+
+    // Load change history when page is available
+    useEffect(() => {
+        if (page) fetchChangeHistory()
+    }, [page, fetchChangeHistory])
+
+    // Generate implementation preview via streaming SSE
     const handleImplement = useCallback(async (customPrompt?: string) => {
         if (!page || isImplementing) return
         setIsImplementing(true)
-        setImplementStatus('Analyzing prompt and generating code changes...')
+        setIsStreaming(true)
+        setStreamingOutput('')
+        setRetryAttempt(0)
+        setImplementStatus('Connecting to AI...')
+        // Ensure panel is visible
+        setShowImplementPanel(true)
+        setImplementPanelMinimized(false)
 
         try {
-            const promptContent = customPrompt || getDisplayContent()
+            const promptContent = customPrompt || changesText || getDisplayContent()
             if (!promptContent.trim()) {
                 setImplementStatus('No prompt content to implement.')
                 setTimeout(() => setImplementStatus(''), 5000)
                 return
             }
 
-            const res = await fetch(`${API_URL}/api/implement`, {
+            const res = await fetch(`${API_URL}/api/implement/stream`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -404,27 +480,89 @@ export default function PromptDetailPage() {
                     scope: 'single'
                 })
             })
-            const data = await res.json()
 
-            if (data.success) {
-                setImplementDiffs(data.diffs || [])
-                setImplementSessionId(data.sessionId)
-                setImplementMemory(data.memory || '')
-                setSuggestedFiles(data.suggestedFiles || [])
-                setShowDiffModal(true)
-                setImplementStatus(`Preview ready (${data.elapsed})`)
-            } else {
-                setImplementStatus(`Implementation failed: ${data.error}`)
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({ error: 'Unknown error' }))
+                setImplementStatus(`Implementation failed: ${errData.error}`)
                 setTimeout(() => setImplementStatus(''), 8000)
+                return
             }
+
+            const reader = res.body?.getReader()
+            if (!reader) {
+                setImplementStatus('Streaming not supported by browser')
+                return
+            }
+
+            const decoder = new TextDecoder()
+            let buffer = ''
+            let accumulated = ''
+
+            while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+
+                buffer += decoder.decode(value, { stream: true })
+                const lines = buffer.split('\n')
+                buffer = lines.pop() || ''
+
+                for (const line of lines) {
+                    const trimmed = line.trim()
+                    if (!trimmed || trimmed === 'data: [DONE]') continue
+
+                    if (trimmed.startsWith('data: ')) {
+                        try {
+                            const json = JSON.parse(trimmed.slice(6))
+
+                            switch (json.type) {
+                                case 'status':
+                                    setImplementStatus(json.message)
+                                    break
+                                case 'retry':
+                                    setRetryAttempt(json.attempt || 0)
+                                    setImplementStatus(json.message || `Retrying (${json.attempt}/${json.maxAttempts})...`)
+                                    setStreamingOutput('')
+                                    break
+                                case 'plan':
+                                    setImplementMemory(json.memory || '')
+                                    setSuggestedFiles(json.suggestedFiles || [])
+                                    setImplementStatus('Plan ready, generating code...')
+                                    break
+                                case 'chunk':
+                                    accumulated += json.content || ''
+                                    setStreamingOutput(accumulated)
+                                    break
+                                case 'result':
+                                    setImplementDiffs(json.diffs || [])
+                                    setImplementSessionId(json.sessionId)
+                                    setImplementMemory(json.memory || '')
+                                    setSuggestedFiles(json.suggestedFiles || [])
+                                    setShowDiffModal(true)
+                                    setImplementStatus(`Preview ready (${json.elapsed})`)
+                                    break
+                                case 'error':
+                                    setImplementStatus(`Error: ${json.error}`)
+                                    setTimeout(() => setImplementStatus(''), 8000)
+                                    break
+                            }
+                        } catch {
+                            // Skip malformed JSON
+                        }
+                    }
+                }
+            }
+
+            // Refresh change history after implement
+            fetchChangeHistory()
         } catch (err) {
             console.error('Implement error:', err)
             setImplementStatus('Implementation failed: Network error')
             setTimeout(() => setImplementStatus(''), 8000)
         } finally {
             setIsImplementing(false)
+            setIsStreaming(false)
         }
-    }, [page, isImplementing])
+    }, [page, isImplementing, changesText])
 
     // Apply confirmed changes
     const handleApplyChanges = async () => {
@@ -505,19 +643,29 @@ export default function PromptDetailPage() {
                 e.preventDefault()
                 handleImplement()
             }
-            // Close context menu on Escape
+            // Escape: close diff modal, minimize implement panel, close menus
             if (e.key === 'Escape') {
                 setContextMenu(prev => ({ ...prev, visible: false }))
+                setShowOverflowMenu(false)
                 if (showDiffModal) setShowDiffModal(false)
+                else if (showImplementPanel && !implementPanelMinimized) setImplementPanelMinimized(true)
+            }
+            // Enter to apply in diff modal
+            if (e.key === 'Enter' && showDiffModal && !isApplying) {
+                e.preventDefault()
+                handleApplyChanges()
             }
         }
         window.addEventListener('keydown', handleKeyDown)
         return () => window.removeEventListener('keydown', handleKeyDown)
-    }, [handleImplement, showDiffModal])
+    }, [handleImplement, showDiffModal, isApplying, showImplementPanel, implementPanelMinimized])
 
-    // Close context menu on click outside
+    // Close context/overflow menu on click outside
     useEffect(() => {
-        const handleClick = () => setContextMenu(prev => ({ ...prev, visible: false }))
+        const handleClick = () => {
+            setContextMenu(prev => ({ ...prev, visible: false }))
+            setShowOverflowMenu(false)
+        }
         window.addEventListener('click', handleClick)
         return () => window.removeEventListener('click', handleClick)
     }, [])
@@ -546,32 +694,35 @@ export default function PromptDetailPage() {
             const devTextarea = document.getElementById(`editor-dev-${page.id}`) as HTMLTextAreaElement
 
             if (nlpTextarea && devTextarea && page.rawContent) {
-                const originalLines = page.rawContent.split('\n')
-                const sortedNlp = [...nlpSections].sort((a, b) => a.startLine - b.startLine)
-                const sortedDev = [...devSections].sort((a, b) => a.startLine - b.startLine)
+                const originalContent = page.rawContent
+                const originalNlpBlock = getNlpContent()
+                const originalDevBlock = getDevContent()
+                const updatedNlpBlock = nlpTextarea.value
+                const updatedDevBlock = devTextarea.value
 
-                const replacements: { startLine: number; endLine: number; newContent: string }[] = []
+                const NLP_TOKEN = '__NLP_PROMPT_BLOCK_TOKEN__'
+                const DEV_TOKEN = '__DEV_PROMPT_BLOCK_TOKEN__'
 
-                if (sortedNlp.length > 0) {
-                    const nlpStart = sortedNlp[0].startLine
-                    const nlpEnd = sortedNlp[sortedNlp.length - 1].endLine
-                    replacements.push({ startLine: nlpStart, endLine: nlpEnd, newContent: nlpTextarea.value })
-                }
-                if (sortedDev.length > 0) {
-                    const devStart = sortedDev[0].startLine
-                    const devEnd = sortedDev[sortedDev.length - 1].endLine
-                    replacements.push({ startLine: devStart, endLine: devEnd, newContent: devTextarea.value })
-                }
+                let replacedContent = originalContent
+                let tokenized = false
 
-                replacements.sort((a, b) => b.startLine - a.startLine)
-
-                const resultLines = [...originalLines]
-                for (const rep of replacements) {
-                    const newLines = rep.newContent.split('\n')
-                    resultLines.splice(rep.startLine - 1, rep.endLine - rep.startLine + 1, ...newLines)
+                if (originalNlpBlock && replacedContent.includes(originalNlpBlock)) {
+                    replacedContent = replacedContent.replace(originalNlpBlock, NLP_TOKEN)
+                    tokenized = true
                 }
 
-                content = resultLines.join('\n')
+                if (originalDevBlock && replacedContent.includes(originalDevBlock)) {
+                    replacedContent = replacedContent.replace(originalDevBlock, DEV_TOKEN)
+                    tokenized = true
+                }
+
+                if (tokenized) {
+                    content = replacedContent
+                        .replace(NLP_TOKEN, updatedNlpBlock)
+                        .replace(DEV_TOKEN, updatedDevBlock)
+                } else {
+                    content = `${updatedNlpBlock}\n\n${updatedDevBlock}`.trim()
+                }
             } else {
                 const textarea = document.getElementById(`editor-${page.id}`) as HTMLTextAreaElement
                 if (!textarea) {
@@ -595,9 +746,13 @@ export default function PromptDetailPage() {
             }
 
             // Re-sync the project after save
-            const seedBody = effectiveProjectId ? { projectId: effectiveProjectId } : {}
-            const seedResult = await apiRequest('/api/seed', { method: 'POST', body: seedBody })
-            console.log('Seed result:', seedResult)
+            try {
+                const seedBody = effectiveProjectId ? { projectId: effectiveProjectId } : {}
+                const seedResult = await apiRequest('/api/seed', { method: 'POST', body: seedBody })
+                console.log('Seed result:', seedResult)
+            } catch (seedError) {
+                console.error('Seed sync warning:', seedError)
+            }
 
             alert('Saved successfully!')
             router.push('/new-dashboard')
@@ -798,6 +953,13 @@ export default function PromptDetailPage() {
                     page={page}
                     collapsed={sidebarCollapsed}
                     onToggle={() => setSidebarCollapsed(prev => !prev)}
+                    changeHistory={changeHistory}
+                    onHistoryClick={(text) => {
+                        setChangesText(text)
+                        setShowImplementPanel(true)
+                        setImplementPanelMinimized(false)
+                    }}
+                    onHistoryDelete={deleteChangeHistory}
                 />
             )}
 
@@ -806,14 +968,16 @@ export default function PromptDetailPage() {
                 {/* Top Header Bar */}
                 <header className="prompt-topbar">
                     <div className="topbar-left">
-                        {/* Back button — hidden in embedded mode */}
-                        {!isEmbedded && (
-                            <button onClick={() => router.push('/new-dashboard')} className="topbar-back-btn" title="Back to Dashboard">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                                    <path d="M15 19l-7-7 7-7" strokeLinecap="round" strokeLinejoin="round" />
-                                </svg>
-                            </button>
-                        )}
+                        {/* Sidebar toggle — matches design */}
+                        <button
+                            onClick={() => setSidebarCollapsed(prev => !prev)}
+                            className="topbar-menu-btn"
+                            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                        >
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M3 12h18M3 6h18M3 18h18" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                        </button>
                         <div className="topbar-file-icon">
                             {fileInitials}
                         </div>
@@ -824,34 +988,31 @@ export default function PromptDetailPage() {
                     </div>
 
                     <div className="topbar-right">
-                        <button
-                            className={`topbar-action-btn generate-btn ${isGenerating ? 'generating' : ''}`}
-                            onClick={handleGenerate}
-                            disabled={isGenerating}
-                            title={isGenerating ? generateStatus : 'Generate prompts from source code'}
-                        >
-                            {isGenerating ? (
-                                <>
-                                    <span className="generate-spinner" />
-                                    Generating...
-                                </>
-                            ) : (
-                                <>
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round" strokeLinejoin="round" />
-                                    </svg>
-                                    {page.promptFilePath ? '✨ Re-generate' : '✨ Generate'}
-                                </>
-                            )}
-                        </button>
                         {page.promptFilePath && (
                             <>
-                                {/* Implement Button */}
+                                {/* Edit Button */}
                                 <button
-                                    className={`topbar-action-btn implement-btn ${isImplementing ? 'implementing' : ''}`}
-                                    onClick={() => handleImplement()}
+                                    onClick={() => setIsEditing(!isEditing)}
+                                    className={`topbar-action-btn edit-btn ${isEditing ? 'editing' : ''}`}
+                                >
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" strokeLinecap="round" strokeLinejoin="round" />
+                                    </svg>
+                                    ✏️ Edit
+                                </button>
+                                {/* Implement Button — toggles bottom panel */}
+                                <button
+                                    className={`topbar-action-btn implement-btn ${isImplementing ? 'implementing' : ''} ${showImplementPanel ? 'active' : ''}`}
+                                    onClick={() => {
+                                        if (showImplementPanel) {
+                                            setShowImplementPanel(false)
+                                        } else {
+                                            setShowImplementPanel(true)
+                                            setImplementPanelMinimized(false)
+                                        }
+                                    }}
                                     disabled={isImplementing || isGenerating}
-                                    title={isImplementing ? implementStatus : 'Implement changes from prompt (Ctrl+Shift+I)'}
+                                    title={isImplementing ? implementStatus : 'Toggle Implement Panel (Ctrl+Shift+I to run)'}
                                 >
                                     {isImplementing ? (
                                         <>
@@ -859,14 +1020,10 @@ export default function PromptDetailPage() {
                                             Implementing...
                                         </>
                                     ) : (
-                                        <>
-                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" strokeLinecap="round" strokeLinejoin="round" />
-                                            </svg>
-                                            🚀 Implement
-                                        </>
+                                        <>⚡ Implement</>
                                     )}
                                 </button>
+                                {/* Undo — only when available */}
                                 {lastHistoryId && (
                                     <button
                                         className={`topbar-action-btn undo-btn ${isUndoing ? 'undoing' : ''}`}
@@ -877,22 +1034,51 @@ export default function PromptDetailPage() {
                                         {isUndoing ? '↩️ Undoing...' : '↩️ Undo'}
                                     </button>
                                 )}
-                                <button onClick={downloadFile} className="topbar-action-btn download-btn">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" strokeLinecap="round" strokeLinejoin="round" />
-                                    </svg>
-                                    Download
-                                </button>
-                                <button
-                                    onClick={() => setIsEditing(!isEditing)}
-                                    className={`topbar-action-btn edit-btn ${isEditing ? 'editing' : ''}`}
-                                >
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                        <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" strokeLinecap="round" strokeLinejoin="round" />
-                                    </svg>
-                                    Edit File
-                                </button>
+                                {/* Overflow Menu */}
+                                <div className="topbar-overflow-wrapper">
+                                    <button
+                                        className={`topbar-action-btn overflow-btn ${showOverflowMenu ? 'active' : ''}`}
+                                        onClick={(e) => { e.stopPropagation(); setShowOverflowMenu(!showOverflowMenu); }}
+                                        title="More actions"
+                                    >
+                                        ⋯
+                                    </button>
+                                    {showOverflowMenu && (
+                                        <div className="topbar-overflow-menu">
+                                            <button
+                                                className={`overflow-menu-item ${isGenerating ? 'disabled' : ''}`}
+                                                onClick={() => { setShowOverflowMenu(false); handleGenerate(); }}
+                                                disabled={isGenerating}
+                                            >
+                                                {isGenerating ? '⏳ Generating...' : page.promptFilePath ? '✨ Re-generate' : '✨ Generate'}
+                                            </button>
+                                            <button
+                                                className="overflow-menu-item"
+                                                onClick={() => { setShowOverflowMenu(false); downloadFile(); }}
+                                            >
+                                                📥 Download
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
                             </>
+                        )}
+                        {!page.promptFilePath && (
+                            <button
+                                className={`topbar-action-btn generate-btn ${isGenerating ? 'generating' : ''}`}
+                                onClick={handleGenerate}
+                                disabled={isGenerating}
+                                title={isGenerating ? generateStatus : 'Generate prompts from source code'}
+                            >
+                                {isGenerating ? (
+                                    <>
+                                        <span className="generate-spinner" />
+                                        Generating...
+                                    </>
+                                ) : (
+                                    <>✨ Generate</>
+                                )}
+                            </button>
                         )}
                         <ThemeToggle />
                     </div>
@@ -934,14 +1120,21 @@ export default function PromptDetailPage() {
                 {/* Auto-suggest Implementation Banner */}
                 {showImplementBanner && page.promptFilePath && !isEditing && !showDiffModal && (
                     <div className="implement-suggest-banner">
-                        <span>📋 Prompt available. Apply changes to source code?</span>
+                        <span>Prompt available. Apply changes to source code?</span>
                         <div className="implement-suggest-actions">
                             <button
                                 className="implement-suggest-btn apply"
+                                onClick={() => { setShowImplementBanner(false); setShowImplementPanel(true); setImplementPanelMinimized(false); }}
+                                disabled={isImplementing}
+                            >
+                                Write Changes
+                            </button>
+                            <button
+                                className="implement-suggest-btn apply secondary"
                                 onClick={() => { setShowImplementBanner(false); handleImplement(); }}
                                 disabled={isImplementing}
                             >
-                                🚀 Preview & Apply
+                                Preview &amp; Apply
                             </button>
                             <button
                                 className="implement-suggest-btn dismiss"
@@ -950,6 +1143,73 @@ export default function PromptDetailPage() {
                                 Dismiss
                             </button>
                         </div>
+                    </div>
+                )}
+
+                {/* Bottom Implement Panel */}
+                {showImplementPanel && page.promptFilePath && !isEditing && (
+                    <div className={`implement-bottom-panel ${implementPanelMinimized ? 'minimized' : ''}`}>
+                        <div className="implement-panel-header">
+                            <div className="implement-panel-title">
+                                <span>⚡ Implement</span>
+                                {retryAttempt > 0 && (
+                                    <span className="implement-attempt-badge">Attempt {retryAttempt}/3</span>
+                                )}
+                            </div>
+                            <div className="implement-panel-controls">
+                                <button
+                                    className="implement-panel-btn"
+                                    onClick={() => setImplementPanelMinimized(!implementPanelMinimized)}
+                                    title={implementPanelMinimized ? 'Expand' : 'Minimize'}
+                                >
+                                    {implementPanelMinimized ? '△' : '▽'}
+                                </button>
+                                <button
+                                    className="implement-panel-btn"
+                                    onClick={() => setShowImplementPanel(false)}
+                                    title="Close panel"
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                        </div>
+
+                        {!implementPanelMinimized && (
+                            <div className="implement-panel-body">
+                                <textarea
+                                    className="implement-panel-textarea"
+                                    value={changesText}
+                                    onChange={e => setChangesText(e.target.value)}
+                                    placeholder="Describe what you want to change (leave empty to implement from current prompt)...&#10;&#10;e.g. Add a dark mode toggle button in the header"
+                                    rows={3}
+                                />
+
+                                {/* Streaming output */}
+                                {isStreaming && streamingOutput && (
+                                    <div className="implement-panel-stream">
+                                        <div className="implement-panel-stream-header">
+                                            <span className="streaming-dot" />
+                                            Generating changes...
+                                        </div>
+                                        <pre className="implement-panel-stream-code">{streamingOutput.slice(-2000)}</pre>
+                                    </div>
+                                )}
+
+                                <div className="implement-panel-footer">
+                                    <button
+                                        className="implement-panel-run-btn"
+                                        onClick={() => handleImplement(changesText.trim() ? changesText : undefined)}
+                                        disabled={isImplementing}
+                                    >
+                                        {isImplementing ? (
+                                            <><span className="generate-spinner" /> Running...</>
+                                        ) : (
+                                            <>🚀 Run</>
+                                        )}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 )}
 
@@ -1003,13 +1263,6 @@ export default function PromptDetailPage() {
                                 <path d="M16 18l6-6-6-6M8 6l-6 6 6 6" strokeLinecap="round" strokeLinejoin="round" />
                             </svg>
                             Code
-                        </button>
-
-                        {/* Save/Bookmark icon */}
-                        <button className="icon-btn" title="Bookmark">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
                         </button>
 
                         {/* Fullscreen */}
@@ -1254,6 +1507,7 @@ export default function PromptDetailPage() {
                                 /* Single column view (NLP, DEVELOPER) */
                                 <div className="content-view-wrapper">
                                     <div className="content-view-header">
+                                        <span className="content-view-title">Code Documentation</span>
                                         <CopyButton text={displayContent} />
                                     </div>
                                     <div className="content-view-body">
@@ -1274,14 +1528,13 @@ export default function PromptDetailPage() {
                     className="implement-context-menu"
                     style={{ top: contextMenu.y, left: contextMenu.x }}
                 >
+                    {typeof window !== 'undefined' && window.getSelection()?.toString().trim() ? (
+                        <button onClick={() => { setContextMenu(prev => ({ ...prev, visible: false })); handleImplement(window.getSelection()!.toString()); }}>
+                            ⚡ Implement selected text
+                        </button>
+                    ) : null}
                     <button onClick={() => { setContextMenu(prev => ({ ...prev, visible: false })); handleImplement(); }}>
-                        🚀 Implement this prompt
-                    </button>
-                    <button onClick={() => { setContextMenu(prev => ({ ...prev, visible: false })); handleImplement(getNlpContent()); }}>
-                        📝 Implement NLP section
-                    </button>
-                    <button onClick={() => { setContextMenu(prev => ({ ...prev, visible: false })); handleImplement(getDevContent()); }}>
-                        ⚙️ Implement Developer section
+                        ⚡ Implement visible content
                     </button>
                 </div>
             )}
@@ -1296,8 +1549,28 @@ export default function PromptDetailPage() {
                                     <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" strokeLinecap="round" strokeLinejoin="round" />
                                 </svg>
                                 Implementation Preview
+                                {/* Diff stats badge */}
+                                {implementDiffs.length > 0 && (() => {
+                                    let added = 0, removed = 0
+                                    implementDiffs.forEach(d => {
+                                        if (d.diff) {
+                                            d.diff.forEach((line: { type: string }) => {
+                                                if (line.type === 'add') added++
+                                                if (line.type === 'remove') removed++
+                                            })
+                                        }
+                                    })
+                                    return (
+                                        <span className="diff-stats-badge">
+                                            <span className="diff-stat-add">+{added}</span>
+                                            <span className="diff-stat-remove">-{removed}</span>
+                                            <span className="diff-stat-files">{implementDiffs.length} file(s)</span>
+                                        </span>
+                                    )
+                                })()}
                             </div>
                             <div className="diff-modal-actions">
+                                <span className="diff-shortcut-hint">Esc to reject, Enter to apply</span>
                                 <button
                                     className="diff-action-btn reject"
                                     onClick={() => setShowDiffModal(false)}
@@ -1333,41 +1606,119 @@ export default function PromptDetailPage() {
                         )}
 
                         <div className="diff-files">
-                            {implementDiffs.map((diff, idx) => (
-                                <div key={idx} className="diff-file-block">
-                                    <div className="diff-file-header">
-                                        <span className={`diff-file-badge ${diff.isNew ? 'new' : 'modified'}`}>
-                                            {diff.isNew ? 'NEW' : 'MODIFIED'}
-                                        </span>
-                                        <span className="diff-file-path">{diff.filePath}</span>
-                                        <span className="diff-file-desc">{diff.description}</span>
-                                    </div>
-                                    <div className="diff-content">
-                                        <div className="diff-side old">
-                                            <div className="diff-side-header">Original</div>
-                                            <pre className="diff-code">
-                                                {diff.oldCode ? diff.oldCode.split('\n').map((line: string, i: number) => (
-                                                    <div key={i} className="diff-line">
-                                                        <span className="diff-line-num">{i + 1}</span>
-                                                        <span className="diff-line-content">{line}</span>
-                                                    </div>
-                                                )) : <div className="diff-empty">New file</div>}
-                                            </pre>
+                            {implementDiffs.map((diff, idx) => {
+                                // Build context-only hunks from the diff data
+                                const CONTEXT_LINES = 3
+                                const oldLines = diff.oldCode ? diff.oldCode.split('\n') : []
+                                const newLines = diff.newCode.split('\n')
+
+                                // Collect changed line indices (1-based from diff data)
+                                const removedLineSet = new Set<number>()
+                                const addedLineSet = new Set<number>()
+                                if (diff.diff) {
+                                    diff.diff.forEach((d: { type: string; line: number }) => {
+                                        if (d.type === 'remove') removedLineSet.add(d.line)
+                                        if (d.type === 'add') addedLineSet.add(d.line)
+                                    })
+                                }
+
+                                // Build old-side hunks (context around removed lines)
+                                const buildHunks = (lines: string[], changedSet: Set<number>) => {
+                                    if (lines.length === 0 || changedSet.size === 0) return []
+                                    const sortedChanged = Array.from(changedSet).sort((a, b) => a - b)
+                                    const hunks: Array<{ startLine: number; lines: Array<{ num: number; text: string; changed: boolean }> }> = []
+
+                                    let currentHunk: Array<{ num: number; text: string; changed: boolean }> = []
+                                    let hunkStart = 0
+                                    let lastIncluded = -1
+
+                                    for (const changedLine of sortedChanged) {
+                                        const contextStart = Math.max(1, changedLine - CONTEXT_LINES)
+                                        const contextEnd = Math.min(lines.length, changedLine + CONTEXT_LINES)
+
+                                        // If gap between this context and lastIncluded, start new hunk
+                                        if (currentHunk.length > 0 && contextStart > lastIncluded + 1) {
+                                            hunks.push({ startLine: hunkStart, lines: currentHunk })
+                                            currentHunk = []
+                                        }
+
+                                        const start = currentHunk.length > 0 ? Math.max(contextStart, lastIncluded + 1) : contextStart
+                                        if (currentHunk.length === 0) hunkStart = start
+
+                                        for (let i = start; i <= contextEnd; i++) {
+                                            currentHunk.push({
+                                                num: i,
+                                                text: lines[i - 1] || '',
+                                                changed: changedSet.has(i)
+                                            })
+                                            lastIncluded = i
+                                        }
+                                    }
+                                    if (currentHunk.length > 0) {
+                                        hunks.push({ startLine: hunkStart, lines: currentHunk })
+                                    }
+                                    return hunks
+                                }
+
+                                const oldHunks = buildHunks(oldLines, removedLineSet)
+                                const newHunks = buildHunks(newLines, addedLineSet)
+
+                                return (
+                                    <div key={idx} className="diff-file-block">
+                                        <div className="diff-file-header">
+                                            <span className={`diff-file-badge ${diff.isNew ? 'new' : 'modified'}`}>
+                                                {diff.isNew ? 'NEW' : 'MODIFIED'}
+                                            </span>
+                                            <span className="diff-file-path">{diff.filePath}</span>
+                                            <span className="diff-file-desc">{diff.description}</span>
                                         </div>
-                                        <div className="diff-side new">
-                                            <div className="diff-side-header">Modified</div>
-                                            <pre className="diff-code">
-                                                {diff.newCode.split('\n').map((line: string, i: number) => (
-                                                    <div key={i} className="diff-line">
-                                                        <span className="diff-line-num">{i + 1}</span>
-                                                        <span className="diff-line-content">{line}</span>
-                                                    </div>
-                                                ))}
-                                            </pre>
+                                        <div className="diff-content">
+                                            <div className="diff-side old">
+                                                <div className="diff-side-header">Original</div>
+                                                <pre className="diff-code">
+                                                    {oldHunks.length > 0 ? oldHunks.map((hunk, hi) => (
+                                                        <div key={hi}>
+                                                            {hi > 0 && <div className="diff-hunk-separator">...</div>}
+                                                            {hunk.lines.map((line, li) => (
+                                                                <div key={li} className={`diff-line ${line.changed ? 'diff-line-removed' : ''}`}>
+                                                                    <span className="diff-line-num">{line.num}</span>
+                                                                    {line.changed && <span className="diff-line-marker">-</span>}
+                                                                    {!line.changed && <span className="diff-line-marker"> </span>}
+                                                                    <span className="diff-line-content">{line.text}</span>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )) : <div className="diff-empty">New file</div>}
+                                                </pre>
+                                            </div>
+                                            <div className="diff-side new">
+                                                <div className="diff-side-header">Modified</div>
+                                                <pre className="diff-code">
+                                                    {newHunks.length > 0 ? newHunks.map((hunk, hi) => (
+                                                        <div key={hi}>
+                                                            {hi > 0 && <div className="diff-hunk-separator">...</div>}
+                                                            {hunk.lines.map((line, li) => (
+                                                                <div key={li} className={`diff-line ${line.changed ? 'diff-line-added' : ''}`}>
+                                                                    <span className="diff-line-num">{line.num}</span>
+                                                                    {line.changed && <span className="diff-line-marker">+</span>}
+                                                                    {!line.changed && <span className="diff-line-marker"> </span>}
+                                                                    <span className="diff-line-content">{line.text}</span>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )) : newLines.map((line: string, i: number) => (
+                                                        <div key={i} className="diff-line diff-line-added">
+                                                            <span className="diff-line-num">{i + 1}</span>
+                                                            <span className="diff-line-marker">+</span>
+                                                            <span className="diff-line-content">{line}</span>
+                                                        </div>
+                                                    ))}
+                                                </pre>
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
-                            ))}
+                                )
+                            })}
                         </div>
                     </div>
                 </div>

@@ -41,24 +41,44 @@ function parseWithRepair(raw) {
         json = json.substring(firstBrace);
     }
 
-    // 3. Remove control characters
+    // 3. Remove control characters (but keep \t \n \r which are valid in JSON strings)
     json = json.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
 
-    // 4. Convert backtick template literals to JSON strings
-    json = convertBackticksToStrings(json);
-
-    // 5. Fix trailing commas
-    json = json.replace(/,\s*([\]}])/g, '$1');
-
-    // 6. Close truncated JSON (unclosed brackets/braces/strings)
-    json = closeTruncated(json);
-
-    // Parse
+    // ──────────────────────────────────────────────────────────
+    // FAST PATH: Try parsing the clean JSON directly FIRST.
+    // Most LLM responses (especially fullCode) are valid JSON
+    // and should NOT go through backtick conversion which can
+    // corrupt regex patterns and special characters in code.
+    // ──────────────────────────────────────────────────────────
     try {
         return JSON.parse(json);
+    } catch (_fastErr) {
+        // Fast path failed — continue to repair
+    }
+
+    // Also try with trailing-comma fix + truncation repair (no backtick mangling)
+    let lightRepair = json.replace(/,\s*([\]}])/g, '$1');
+    lightRepair = closeTruncated(lightRepair);
+    try {
+        return JSON.parse(lightRepair);
+    } catch (_lightErr) {
+        // Light repair failed — continue to heavy repair
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // HEAVY REPAIR: Only as a last resort, convert backticks.
+    // This is needed for Llama models that use template literals.
+    // ──────────────────────────────────────────────────────────
+    let repaired = convertBackticksToStrings(json);
+    repaired = repaired.replace(/,\s*([\]}])/g, '$1');
+    repaired = closeTruncated(repaired);
+
+    try {
+        return JSON.parse(repaired);
     } catch (err) {
-        console.error(`  ❌ JSON parse failed after repair: ${err.message}`);
-        console.error(`  📝 Repaired JSON (first 300 chars): ${json.substring(0, 300)}`);
+        console.error(`  ❌ JSON parse failed after all repair attempts: ${err.message}`);
+        console.error(`  📝 Clean JSON (first 300 chars): ${json.substring(0, 300)}`);
+        console.error(`  📝 Repaired JSON (first 300 chars): ${repaired.substring(0, 300)}`);
         throw new Error(
             `Failed to parse LLM response as JSON: ${err.message}\n` +
             `Raw response (first 500 chars): ${raw.substring(0, 500)}`

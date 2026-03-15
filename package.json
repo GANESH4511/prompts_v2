@@ -1,0 +1,17 @@
+{
+    "name": "prompts-v2",
+    "version": "1.0.0",
+    "private": true,
+    "scripts": {
+        "dev": "concurrently -n backend,frontend -c blue,green \"npm run dev:backend\" \"npm run dev:frontend\"",
+        "dev:backend": "cd backend && npm run dev",
+        "dev:frontend": "cd frontend && npx next dev -p 3000",
+        "install:all": "cd backend && npm install && cd ../frontend && npm install"
+    },
+    "devDependencies": {
+        "concurrently": "^9.1.0"
+    },
+    "dependencies": {
+        "diff": "^8.0.3"
+    }
+}

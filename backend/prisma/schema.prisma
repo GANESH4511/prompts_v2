@@ -63,6 +63,23 @@ model ImplementHistory {
   @@map("implement_history")
 }
 
+// Change request history — versions of user change requests per page
+model ChangeRequest {
+  id            String   @id @default(cuid())
+  pageId        String
+  projectId     String?
+  changeText    String   // The user's change request text
+  changeType    String   @default("freetext") // "freetext" or "diff-edit"
+  status        String   @default("pending") // "pending", "applied", "rejected"
+  planJson      String?  // The LLM-generated plan JSON (cached)
+  diffPatches   String?  // The SEARCH/REPLACE patches JSON (cached)
+  createdAt     DateTime @default(now())
+
+  @@index([pageId, createdAt])
+  @@index([projectId])
+  @@map("change_requests")
+}
+
 // ==========================================
 // Cache tables (disposable, rebuilt from filesystem)
 // ==========================================

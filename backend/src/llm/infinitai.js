@@ -12,8 +12,8 @@
  */
 
 const MAX_RETRIES = 2;
-const RETRY_DELAY_MS = 1500;
-const DEFAULT_TIMEOUT_MS = 60000; // 60s timeout for LLM calls
+const RETRY_DELAY_MS = 3000;
+const DEFAULT_TIMEOUT_MS = 300000; // 5 min timeout — Pass 2 implement can output 25k+ chars
 
 function getConfig() {
     const apiKey = process.env.INFINITAI_API_KEY;
@@ -120,7 +120,7 @@ async function generate({ template, sourceCode }) {
         try {
             const result = await callInfinitAI({
                 systemPrompt: template,
-                userPrompt: `Analyze the following source code and generate prompts as instructed:\n\n${sourceCode}`,
+                userPrompt: sourceCode,
                 config
             });
             return result;
@@ -145,4 +145,103 @@ async function generate({ template, sourceCode }) {
     throw lastError;
 }
 
-module.exports = { generate };
+/**
+ * Streaming generation — streams the LLM response chunk by chunk.
+ * Calls onChunk(text) for each content delta.
+ * Returns the full accumulated text.
+ *
+ * @param {Object} params
+ * @param {string} params.template - System prompt
+ * @param {string} params.sourceCode - User prompt
+ * @param {function} params.onChunk - Callback for each text chunk
+ * @returns {string} Full accumulated response
+ */
+async function generateStream({ template, sourceCode, onChunk }) {
+    const config = getConfig();
+    const url = `${config.baseUrl}/chat/completions`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${config.apiKey}`
+            },
+            signal: controller.signal,
+            body: JSON.stringify({
+                model: config.model,
+                messages: [
+                    { role: 'system', content: template },
+                    { role: 'user', content: sourceCode }
+                ],
+                temperature: 0.3,
+                max_tokens: 100000,
+                stream: true
+            })
+        });
+
+        if (!response.ok) {
+            const errorBody = await response.text().catch(() => 'No error body');
+            throw new Error(`InfinitAI API error (${response.status}): ${errorBody.substring(0, 300)}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let accumulated = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed || trimmed === 'data: [DONE]') continue;
+
+                if (trimmed.startsWith('data: ')) {
+                    try {
+                        const json = JSON.parse(trimmed.slice(6));
+                        const content = json.choices?.[0]?.delta?.content;
+                        if (content) {
+                            accumulated += content;
+                            if (onChunk) onChunk(content);
+                        }
+                    } catch {
+                        // Skip malformed chunks
+                    }
+                }
+            }
+        }
+
+        // Process remaining buffer
+        if (buffer.trim() && buffer.trim().startsWith('data: ') && buffer.trim() !== 'data: [DONE]') {
+            try {
+                const json = JSON.parse(buffer.trim().slice(6));
+                const content = json.choices?.[0]?.delta?.content;
+                if (content) {
+                    accumulated += content;
+                    if (onChunk) onChunk(content);
+                }
+            } catch {
+                // Skip
+            }
+        }
+
+        if (!accumulated.trim()) {
+            throw new Error('InfinitAI streaming returned empty response.');
+        }
+
+        return accumulated.trim();
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+module.exports = { generate, generateStream };
