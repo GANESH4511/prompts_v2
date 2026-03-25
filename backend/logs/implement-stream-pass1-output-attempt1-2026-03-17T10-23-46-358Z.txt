@@ -1,0 +1,13 @@
+{
+  "memory": "The code is a React component for a chat page. The change request is to add a yellow button in the header with the name 'Hello' that logs 'you clicked' to the console when clicked.",
+  "affectedSections": ["DEVELOPER PROMPTS - Technical & Precise"],
+  "plan": [
+    {
+      "location": "Header section",
+      "action": "add",
+      "description": "Add a yellow button with the name 'Hello' that logs 'you clicked' to the console when clicked"
+    }
+  ],
+  "suggestedFiles": [],
+  "newFiles": []
+}

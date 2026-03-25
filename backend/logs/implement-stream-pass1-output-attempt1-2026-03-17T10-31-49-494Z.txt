@@ -1,0 +1,13 @@
+{
+  "memory": "The code is for a chat page with a sidebar and a main chat area. The change request is to add a yellow button in the header with the name 'hello'.",
+  "affectedSections": ["DEVELOPER PROMPTS - Technical & Precise"],
+  "plan": [
+    {
+      "location": "Header section",
+      "action": "add",
+      "description": "Add a yellow button with the name 'hello' in the header section"
+    }
+  ],
+  "suggestedFiles": [],
+  "newFiles": []
+}

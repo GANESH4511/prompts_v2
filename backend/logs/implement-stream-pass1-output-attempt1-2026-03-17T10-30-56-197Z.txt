@@ -1,0 +1,13 @@
+{
+  "memory": "The code is for a React chat page that allows users to send messages and interact with an AI assistant. The change request is to add a yellow button in the header with the text 'Hello' that, when clicked, logs 'you clicked' to the console.",
+  "affectedSections": ["DEVELOPER PROMPTS - Technical & Precise"],
+  "plan": [
+    {
+      "location": "Header section of the page.tsx file",
+      "action": "add",
+      "description": "Add a new button element with the text 'Hello' and a yellow background color. Attach an onClick event handler that logs 'you clicked' to the console."
+    }
+  ],
+  "suggestedFiles": [],
+  "newFiles": []
+}

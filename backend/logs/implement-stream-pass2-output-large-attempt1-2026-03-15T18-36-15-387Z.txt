@@ -1,0 +1,268 @@
+Based on the provided source code and change request, I will generate the modified section as per the instructions.
+
+<<<SECTION: 1-60>>>
+
+<div className={`chat-page-layout ${isDark ? "dark" : ""}`}>
+  {/* ===== SIDEBAR ===== */}
+  <aside className={`chat-sidebar ${sidebarOpen ? "open" : "collapsed"}`}>
+    <div className="chat-sidebar-header">
+      <button className="chat-sidebar-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="3" y1="12" x2="21" y2="12" />
+          <line x1="3" y1="6" x2="21" y2="6" />
+          <line x1="3" y1="18" x2="21" y2="18" />
+        </svg>
+      </button>
+      {sidebarOpen && (
+        <button className="chat-new-btn" onClick={createNewSession} id="new-chat-btn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          <span>New Chat</span>
+        </button>
+      )}
+    </div>
+
+    {sidebarOpen && (
+      <div className="chat-sidebar-sessions">
+        <div className="chat-sidebar-label">Recent Chats</div>
+        {sessions.map((session) => (
+          <div
+            key={session.id}
+            className={`chat-session-item ${session.id === activeSessionId ? "active" : ""}`}
+            onClick={() => setActiveSessionId(session.id)}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+            <span className="chat-session-title">{session.title}</span>
+            <button
+              className="chat-session-delete"
+              onClick={(e) => {
+                e.stopPropagation();
+                deleteSession(session.id);
+              }}
+              title="Delete chat"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 6h18" />
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+              </svg>
+            </button>
+          </div>
+        ))}
+      </div>
+    )}
+
+    {sidebarOpen && (
+      <div className="chat-sidebar-footer">
+        <a href="/home" className="chat-sidebar-back">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M19 12H5" />
+            <polyline points="12 19 5 12 12 5" />
+          </svg>
+          Back to Dashboard
+        </a>
+      </div>
+    )}
+  </aside>
+
+  {/* ===== MAIN CHAT AREA ===== */}
+  <main className="chat-main">
+    {/* Header */}
+    <header className="chat-header">
+      {!sidebarOpen && (
+        <button className="chat-sidebar-toggle-main" onClick={() => setSidebarOpen(true)}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        </button>
+      )}
+      <div className="chat-header-model">
+        <div className="chat-model-indicator" />
+        <span className="chat-model-name">InfinitAI</span>
+        <span className="chat-model-label">Llama 3.2 11B Vision</span>
+      </div>
+      <div className="chat-header-actions">
+        <button
+          onClick={() => setShowProfile(true)}
+          id="profile-btn"
+          style={{
+            width: 32, height: 32, borderRadius: 8,
+            background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 11, fontWeight: 700, color: '#fff',
+            border: 'none', cursor: 'pointer',
+            boxShadow: '0 2px 6px rgba(99, 102, 241, 0.3)',
+            transition: 'all 0.2s ease', flexShrink: 0,
+          }}
+          title="Profile & Settings"
+        >
+          {user?.name?.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2) || '?'}
+        </button>
+        <button
+          style={{
+            width: 32, height: 32, borderRadius: 8,
+            background: 'linear-gradient(45deg, #f7dc6f, #f2c464)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 11, fontWeight: 700, color: '#fff',
+            border: 'none', cursor: 'pointer',
+            boxShadow: '0 2px 6px rgba(99, 102, 241, 0.3)',
+            transition: 'all 0.2s ease', flexShrink: 0,
+          }}
+          title="Hello"
+        >
+          Hello
+        </button>
+      </div>
+    </header>
+
+    {/* Messages Area */}
+    <div className="chat-messages-container">
+      {activeSession && activeSession.messages.length === 0 ? (
+        <div className="chat-welcome">
+          <div className="chat-welcome-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+              <line x1="9" y1="9" x2="9.01" y2="9" />
+              <line x1="15" y1="9" x2="15.01" y2="9" />
+            </svg>
+          </div>
+          <h1 className="chat-welcome-title">How can I help you today?</h1>
+          <p className="chat-welcome-sub">
+            Powered by <strong>InfinitAI MaaS</strong> — Llama 3.2 11B Vision
+          </p>
+
+          <div className="chat-suggestions">
+            {[/* ... */].map((suggestion, i) => (
+              <button
+                key={i}
+                className="chat-suggestion-card"
+                onClick={() => {
+                  setInput(suggestion.text);
+                  inputRef.current?.focus();
+                }}
+              >
+                <span className="chat-suggestion-icon">{suggestion.icon}</span>
+                <span className="chat-suggestion-text">{suggestion.text}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="chat-messages">
+          {activeSession?.messages.map((message) => (
+            <div key={message.id} className={`chat-message chat-message-${message.role}`}>
+              <div className="chat-message-avatar">
+                {message.role === "user" ? (
+                  <div className="chat-avatar-user">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                      <circle cx="12" cy="7" r="4" />
+                    </svg>
+                  </div>
+                ) : (
+                  <div className="chat-avatar-ai">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                      <path d="M2 17l10 5 10-5" />
+                      <path d="M2 12l10 5 10-5" />
+                    </svg>
+                  </div>
+                )}
+              </div>
+
+              <div className="chat-message-body">
+                <div className="chat-message-sender">
+                  {message.role === "user" ? "You" : "InfinitAI"}
+                </div>
+                <div
+                  className="chat-message-content"
+                  dangerouslySetInnerHTML={{
+                    __html: formatContent(message.content),
+                  }}
+                />
+                {message.isStreaming && (
+                  <span className="chat-cursor-blink">▊</span>
+                )}
+                {!message.isStreaming && message.role === "assistant" && message.content && (
+                  <div className="chat-message-actions">
+                    <button
+                      className="chat-action-btn"
+                      onClick={() => copyMessage(message.content)}
+                      title="Copy message"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                      </svg>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+          <div ref={messagesEndRef} />
+        </div>
+      )}
+    </div>
+
+    {/* Input Area */}
+    <div className="chat-input-container">
+      <div className="chat-input-wrapper">
+        <textarea
+          ref={inputRef}
+          className="chat-input"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Message InfinitAI..."
+          rows={1}
+          disabled={isLoading}
+          id="chat-input-field"
+        />
+        <div className="chat-input-actions">
+          {isLoading ? (
+            <button className="chat-stop-btn" onClick={stopGeneration} title="Stop generating" id="stop-generate-btn">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <rect x="6" y="6" width="12" height="12" rx="2" />
+              </svg>
+            </button>
+          ) : (
+            <button
+              className={`chat-send-btn ${input.trim() ? "active" : ""}`}
+              onClick={sendMessage}
+              disabled={!input.trim()}
+              title="Send message"
+              id="send-message-btn"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
+            </button>
+          )}
+        </div>
+      </div>
+      <p className="chat-disclaimer">
+        InfinitAI can make mistakes. Check important info.
+      </p>
+    </div>
+  </main>
+
+  {/* Profile Panel */}
+  {user && (
+    <ProfilePanel
+      user={user}
+      isOpen={showProfile}
+      onClose={() => setShowProfile(false)}
+      onLogout={() => { clearAuthData(); window.location.href = '/login'; }}
+    />
+  )}
+</div>
+
+<<<END_SECTION>>>

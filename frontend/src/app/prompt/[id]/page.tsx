@@ -586,8 +586,9 @@ export default function PromptDetailPage() {
                 setShowDiffModal(false)
                 setImplementStatus(`✅ Changes applied successfully! (${data.filesChanged} file(s)) — ${data.elapsed}`)
                 setShowImplementBanner(false)
-                // Refresh page data
+                // Refresh page data & change history
                 await fetchPageData(true)
+                fetchChangeHistory()
                 if (viewMode === 'code') fetchSourceCode()
                 setTimeout(() => setImplementStatus(''), 10000)
             } else {

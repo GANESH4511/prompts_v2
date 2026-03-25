@@ -1,0 +1,13 @@
+{
+  "memory": "The code is for a chat page with a sidebar, main chat area, and input field. The change request is to add a blue button in the header with the name 'hello' that, when clicked, logs 'you clicked blue' to the console.",
+  "affectedSections": ["DEVELOPER PROMPTS - Technical & Precise"],
+  "plan": [
+    {
+      "location": "Header section",
+      "action": "add",
+      "description": "Add a blue button with the name 'hello' that logs 'you clicked blue' to the console when clicked"
+    }
+  ],
+  "suggestedFiles": [],
+  "newFiles": []
+}

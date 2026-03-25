@@ -1,0 +1,18 @@
+{
+  "memory": "The code is a React application for a chat page. The change request is to add a green button in the header with the name 'Hello' and log 'You clicked green button' to the console when clicked.",
+  "affectedSections": ["DEVELOPER PROMPTS - Technical & Precise"],
+  "plan": [
+    {
+      "location": "Header section",
+      "action": "add",
+      "description": "Add a green button with the name 'Hello'"
+    },
+    {
+      "location": "Button click event handler",
+      "action": "modify",
+      "description": "Log 'You clicked green button' to the console when the button is clicked"
+    }
+  ],
+  "suggestedFiles": [],
+  "newFiles": []
+}

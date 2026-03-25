@@ -259,6 +259,18 @@ router.post('/apply', async (req, res) => {
             data: { pageId: session.pageId, projectId: session.projectId, promptContent: session.promptContent, scope: session.scope, filesChanged: JSON.stringify(filesChanged), status: 'applied' }
         });
 
+        // Record in change history for sidebar
+        await prisma.changeRequest.create({
+            data: {
+                pageId: session.pageId,
+                projectId: session.projectId,
+                changeText: session.promptContent,
+                changeType: 'freetext',
+                status: 'applied',
+                diffPatches: JSON.stringify(filesChanged)
+            }
+        });
+
         const seedResult = await seedProject(session.rootDir, session.projectId);
         pendingSessions.delete(sessionId);
 

@@ -1,0 +1,488 @@
+================================================================================
+PROJECT DETAIL — prompts-v2 (Agentic Prompt Database)
+================================================================================
+
+--------------------------------------------------------------------------------
+1. OVERVIEW
+--------------------------------------------------------------------------------
+
+prompts-v2 is an Agentic Prompt Database tool — a developer productivity platform
+that bridges natural language descriptions and precise technical code specifications
+for an external software project (primarily "HR Assist").
+
+Core capabilities:
+  - Scans an external project's source files and auto-generates two types of
+    AI-written prompt descriptions per file using an LLM:
+      * NLP prompts    — plain-language user-facing behaviour descriptions
+      * Developer prompts — precise technical rules for code regeneration
+  - Stores all prompts in a local SQLite database (Pages > Sections > Prompts)
+  - Provides a Next.js frontend to browse, view, edit, and copy prompts
+  - IMPLEMENT feature — user types a natural-language change request, the
+    system runs a 2-pass LLM pipeline (plan + SEARCH/REPLACE patch generation)
+    and writes the changes directly to disk with preview, apply, and undo support
+  - Built-in chat interface for conversing with the LLM
+  - JWT-based authentication with role support
+
+Tech stack:
+  Backend  : Node.js + Express + Prisma (SQLite)
+  Frontend : Next.js 15 (App Router, TypeScript, Tailwind CSS)
+  LLM      : meta-llama/Llama-3.2-11B-Vision-Instruct via InfinitAI MaaS
+  Database : SQLite (via Prisma ORM)
+
+
+--------------------------------------------------------------------------------
+2. DIRECTORY STRUCTURE
+--------------------------------------------------------------------------------
+
+prompts-v2/
+  package.json                 Root workspace — concurrently runs backend+frontend
+  .gitignore
+  detail.txt                   This file
+  backend/
+    .env                       Environment config (DB, JWT, LLM API keys)
+    package.json
+    prisma/
+      schema.prisma            Prisma schema (SQLite)
+      dev.db                   SQLite database file
+      migrations/              Prisma migration SQL history
+    src/
+      index.js                 Express app entrypoint (port 5000)
+      middleware/
+        auth.js                JWT auth middleware (authenticateToken, requireRole)
+      routes/
+        auth.js                Login / register / refresh / verify / profile
+        pages.js               GET /api/pages — list all pages
+        seed.js                POST /api/seed — full project sync from disk
+        generate.js            POST /api/generate-prompts — LLM prompt generation
+        save.js                POST /api/save — save edited prompt to disk + DB
+        implement.js           POST /api/implement + /stream + /apply + /undo
+        prompts.js             Prompt CRUD routes
+        projects.js            Projects CRUD + folder picker (Windows PowerShell)
+        code.js                GET/POST /api/code/:id — read/write source files
+        chat.js                POST /api/chat (SSE streaming) + /api/chat/sync
+      lib/
+        prisma.js              Prisma client singleton
+        templateEngine.js      Load+cache .txt templates; getLatestVersion()
+        contextBuilder.js      buildPageContext() — builds NLP/DEVELOPER context blocks
+        fileOps.js             fileExists, buildDiff, parseSearchReplaceBlocks,
+                               applySearchReplacePatches, parseFullFileOutput
+        jsonRepair.js          parseWithRepair() — robust LLM JSON parser
+        resolveProject.js      resolveProjectRoot() — resolve project path from DB
+      llm/
+        index.js               Provider selector; generatePrompt(), generatePromptStream()
+        infinitai.js           InfinitAI MaaS adapter (generate + generateStream)
+        openai.js              OpenAI adapter (alternate provider)
+        classifier.js          classifyFiles() + classifyByRules() for file categories
+      scripts/
+        folder-picker.ps1      Windows PowerShell native folder picker dialog
+    templates/
+      nlp/
+        v1.txt                 "System Behavior Translator" — NLP prompt generation
+      developer/
+        v1.txt                 "Senior Software Architect" — developer prompt generation
+      implement-plan/
+        v1.txt, v2.txt         Pass 1 planning template (outputs JSON plan)
+      implement-section/
+        v1.txt, v2.txt         Pass 2 code-gen template (SEARCH/REPLACE output)
+      implement/
+        v1.txt, v2.txt, v3.txt Legacy/alternate full-file implement templates
+    logs/                      Debug logs from implement pipeline (auto-created)
+    tests/
+      implement-smoke.js       Smoke tests for implement pipeline
+  frontend/
+    next.config.ts
+    tailwind.config.js
+    tsconfig.json
+    src/
+      app/
+        layout.tsx             Root layout — wraps ThemeProvider + DashboardModeProvider
+        page.tsx               Root redirect
+        login/page.tsx         Login form
+        register/page.tsx      Registration form
+        home/page.tsx
+        new-dashboard/page.tsx NLP mode dashboard (main feature page)
+        dev-dashboard/page.tsx Developer mode dashboard
+        chats/page.tsx         Chat interface (SSE streaming, multi-session)
+        prompt/[id]/page.tsx   Individual prompt detail page
+      components/
+        ThemeProvider.tsx      Light/dark theme context + localStorage persistence
+        ThemeToggle.tsx        Theme toggle button
+        ProfilePanel.tsx       Slide-out profile/settings panel
+      contexts/
+        DashboardModeContext.tsx  'nlp' | 'developer' mode; getDashboardRoute()
+      lib/
+        api.ts                 JWT auth helpers, apiRequest(), login(), register()
+
+
+--------------------------------------------------------------------------------
+3. BACKEND: ROUTES
+--------------------------------------------------------------------------------
+
+Express app runs on port 5000 with:
+  - CORS for localhost:3000 and localhost:3001
+  - 10MB JSON body limit
+  - Response compression
+  - Request logging
+
+Public routes (no auth required):
+  POST   /api/auth/login         Login — returns accessToken + refreshToken
+  POST   /api/auth/register      Register new user
+  POST   /api/auth/refresh       Refresh access token
+  POST   /api/auth/verify        Verify token validity
+  GET    /api/auth/profile        Get current user profile
+  POST   /api/seed               Full project sync (scan disk → update DB)
+  GET    /api/seed/check-sync    Dirty-check: disk vs DB (returns out-of-sync files)
+  POST   /api/generate-prompts   LLM prompt gen for a file (NLP + Developer)
+  POST   /api/chat               Chat with LLM (SSE streaming)
+  POST   /api/chat/sync          Chat with LLM (synchronous)
+  POST   /api/implement          Generate diff preview (2-pass pipeline)
+  POST   /api/implement/stream   Generate diff preview via SSE streaming
+  POST   /api/implement/apply    Apply confirmed code changes to disk
+  POST   /api/implement/undo     Rollback applied changes from .bak backups
+  GET    /api/health             Health check
+
+Protected routes (require JWT Bearer):
+  GET    /api/pages              List all pages with sections + prompts
+  POST   /api/save               Save edited prompt .txt to disk + DB reseed
+  GET    /api/projects/user/:id  List projects for a user
+  POST   /api/projects           Create new project
+  PUT    /api/projects/:id       Update project
+  DELETE /api/projects/:id       Delete project
+  POST   /api/projects/pick-folder  Open Windows folder picker dialog
+  GET    /api/projects/browse    Browse directory tree
+  GET    /api/code/:id           Read source code file
+  POST   /api/code/:id           Write source code file
+
+
+--------------------------------------------------------------------------------
+4. DATABASE SCHEMA (Prisma — SQLite)
+--------------------------------------------------------------------------------
+
+Two tiers: Core tables (persistent) and Cache tables (rebuilt from filesystem).
+
+CORE TABLES (persistent):
+
+  User
+    id, email (unique), password (bcrypt), name, role (default "user")
+    → has many Project
+
+  Project
+    id, name, path (filesystem path), description, isActive, userId
+    → unique on (userId, path)
+    → has many Page, ImplementHistory
+
+  ImplementHistory
+    id, pageId, projectId, promptContent, scope, filesChanged (JSON),
+    status ("applied" | "reverted")
+    createdAt, updatedAt
+
+  ChangeRequest
+    id, pageId, projectId, changeText, changeType, status,
+    planJson (cached), diffPatches (cached)
+
+CACHE TABLES (disposable — rebuilt by /api/seed):
+
+  Page  (one per source code file)
+    id, filePath, componentName, totalLines, purpose
+    category (FRONTEND | BACKEND | DATABASE)
+    promptFilePath, rawContent, contentHash (SHA-256), fileMtime
+    projectId
+    → unique on (projectId, filePath)
+    → has many Section
+
+  Section  (code sections within a file)
+    id, pageId, name, startLine, endLine, purpose
+    → belongs to Page (cascade delete)
+    → has many Prompt
+
+  Prompt  (individual prompt entries)
+    id, sectionId, template, example, description, lineNumber
+    promptType (NLP | DEVELOPER)
+    → belongs to Section (cascade delete)
+
+Enums:
+  FileCategory : FRONTEND | BACKEND | DATABASE
+  PromptType   : NLP | DEVELOPER
+
+
+--------------------------------------------------------------------------------
+5. LLM PIPELINE
+--------------------------------------------------------------------------------
+
+PROVIDER ABSTRACTION (backend/src/llm/index.js):
+  - LLM_PROVIDER env var selects provider (default: "infinitai"; also "openai")
+  - generatePrompt({ template, sourceCode, metadata })
+      Non-streaming call. Returns full response string. 5-min timeout.
+  - generatePromptStream({ template, sourceCode, metadata, onChunk })
+      Streaming call. Fires onChunk(text) per delta. Returns full accumulated text.
+      Falls back to batch generatePrompt if provider lacks streaming support.
+
+INFINITAI ADAPTER (backend/src/llm/infinitai.js):
+  - OpenAI-compatible API: POST {INFINITAI_BASE_URL}/chat/completions
+  - Model   : meta-llama/Llama-3.2-11B-Vision-Instruct
+  - Temp    : 0.3
+  - Tokens  : 100,000 max
+  - Retries : up to 2 retries with 3s/6s exponential backoff (non-auth errors only)
+  - Streaming: reads SSE stream, calls onChunk() per content delta
+
+TEMPLATE ENGINE (backend/src/lib/templateEngine.js):
+  - Templates: backend/templates/<type>/<version>.txt
+  - getLatestVersion(type) — scans directory, reverse-alpha sort → v3 > v2 > v1
+  - loadTemplate(type, version) — reads and caches .txt content in memory
+  - Cache cleared on server restart
+
+PROMPT GENERATION FLOW (POST /api/generate-prompts):
+  1. Read source code file from disk (resolved from DB project path)
+  2. Load latest "nlp" and "developer" templates in parallel
+  3. generatePrompt() for both in Promise.all
+  4. Write combined NLP + Developer output to a .txt file alongside source
+     (e.g., page.tsx → page.txt) using atomic .tmp → rename
+  5. seedSinglePage() to re-parse and update DB
+
+IMPLEMENT PIPELINE (POST /api/implement/stream):
+
+  Pass 1 — Planning (implement-plan/v2.txt):
+    System : "You are a Code Change Planner."
+    User   : NLP PAGE CONTEXT + source code + change request
+    Output : JSON { memory, affectedSections[], plan[], suggestedFiles[], newFiles[] }
+    Parsed : parseWithRepair() — handles markdown fences, trailing commas, truncation
+
+  Pass 2 — Code Generation (implement-section/v2.txt):
+    System : "You are a Code Implementation Engine for targeted changes."
+    User   : Developer PAGE CONTEXT (filtered to affectedSections) + source code
+             + plan summary + change request
+    Output : <<<SEARCH>>>...<<<REPLACE>>>...<<<END>>> blocks
+             (and optionally <<<NEW_FILE: path>>>...<<<END_FILE>>>)
+    Parsed : parseSearchReplaceBlocks() → { patches[], newFiles[] }
+    Applied: applySearchReplacePatches() — exact match, whitespace-tolerant fallback
+
+  SEARCH/REPLACE is used for ALL files (no small/large file branching).
+
+  SSE events emitted by /stream:
+    "status"  — progress message ("Analysing code...", "Generating code changes...")
+    "plan"    — Pass 1 result (memory, plan[], suggestedFiles[])
+    "chunk"   — streaming LLM output delta (Pass 2)
+    "retry"   — auto-retry notification (up to 2 attempts)
+    "result"  — final sessionId + diffs[] + memory
+    "error"   — error message with retryable flag
+
+  APPLY FLOW (POST /api/implement/apply):
+    1. Write .bak backup of each file before overwriting
+    2. Create new files with mkdir -p
+    3. Write modified content to disk
+    4. Save ImplementHistory record to DB
+    5. Re-run seedProject() to sync DB
+
+  UNDO FLOW (POST /api/implement/undo):
+    1. Read filesChanged JSON from ImplementHistory
+    2. Restore .bak files, delete created files
+    3. Mark history as "reverted", re-seed DB
+
+  PENDING SESSIONS:
+    In-memory Map keyed by UUID, stores diffs awaiting /apply.
+    Auto-expire after 30 minutes.
+
+JSON REPAIR (backend/src/lib/jsonRepair.js):
+  Three-pass repair for LLM JSON output:
+  1. Fast path   — strip markdown fences, strip leading text, remove control chars
+  2. Light repair — fix trailing commas + close truncated braces → JSON.parse()
+  3. Heavy repair — convert Llama backtick template literals to double-quoted strings
+
+CONTEXT BUILDER (backend/src/lib/contextBuilder.js):
+  buildPageContext(page, mode, filterSections?)
+    - Renders "=== PAGE CONTEXT ===" block with SECTION entries
+    - NLP mode      → INTENT: blocks (from NLP prompts or section.purpose)
+    - Developer mode → RULES: blocks (from DEVELOPER prompts)
+    - filterSections[] — limits output to affected sections only (Pass 2)
+
+DEBUG LOGGING:
+  Every implement request writes timestamped files to backend/logs/:
+    implement-pass1-input-*.txt           Pass 1 full system+user prompt
+    implement-pass1-output-*.txt          Pass 1 raw LLM response
+    implement-pass2-input-*.txt           Pass 2 full system+user prompt
+    implement-pass2-output-*.txt          Pass 2 raw LLM response
+    implement-stream-pass{N}-*-*.txt      Stream route equivalents per attempt
+
+
+--------------------------------------------------------------------------------
+6. FRONTEND
+--------------------------------------------------------------------------------
+
+PAGES:
+
+  login/page.tsx
+    Login form. Calls login() from api.ts. Stores accessToken, refreshToken,
+    and user object in localStorage.
+
+  new-dashboard/page.tsx  (NLP mode — main feature page)
+    Lists all pages grouped by category (FRONTEND / BACKEND / DATABASE).
+    For each page: shows sections, NLP prompts, action buttons.
+    Buttons: Generate (LLM), Save (disk+DB), Implement (code change), Sync.
+    Includes the implement panel: text input → SSE stream → diff preview →
+    apply/reject buttons.
+
+  dev-dashboard/page.tsx  (Developer mode)
+    Same data but developer-focused view with Developer prompts.
+
+  chats/page.tsx
+    Multi-session chat interface.
+    Each session has its own message history.
+    Sends messages via POST /api/chat (SSE), streams response token-by-token.
+    Auto-scroll to bottom. Abort support (AbortController).
+    Stores user from localStorage for profile display.
+
+  prompt/[id]/page.tsx
+    Individual prompt detail view.
+
+COMPONENTS:
+
+  ThemeProvider.tsx
+    React Context for "light" | "dark" theme.
+    Persists to localStorage under key "theme".
+    Applies .dark CSS class to <html> element.
+
+  ProfilePanel.tsx
+    Slide-out panel (right side).
+    Shows user name/email, theme toggle, dashboard mode toggle, logout.
+
+  ThemeToggle.tsx
+    Icon button to toggle between light and dark mode.
+
+CONTEXTS:
+
+  DashboardModeContext.tsx
+    "nlp" | "developer" mode context.
+    Persists to localStorage under key "dashboardMode".
+    getDashboardRoute() → "/new-dashboard" or "/dev-dashboard"
+
+API LAYER (lib/api.ts):
+  Tokens stored in localStorage: accessToken, refreshToken, user
+  apiRequest()   — auto-attaches Bearer, auto-retries on 401 with token refresh
+  login()        — POST /api/auth/login, stores tokens
+  register()     — POST /api/auth/register
+  logout()       — clears localStorage tokens
+  verifyToken()  — GET /api/auth/verify
+  getCurrentUser() — reads user object from localStorage
+  Base URL: NEXT_PUBLIC_API_URL env (defaults http://localhost:5000)
+
+
+--------------------------------------------------------------------------------
+7. SEEDING SYSTEM (backend/src/routes/seed.js)
+--------------------------------------------------------------------------------
+
+seedProject(rootDir, projectId):
+  1. Scans disk for .js/.jsx/.ts/.tsx files (skips node_modules, .next, build, etc.)
+  2. Finds matching .txt prompt files (strips extension, looks for .txt pair)
+  3. Dirty-checking: compares fileMtime (primary) and contentHash (secondary) vs DB
+     Only re-parses and updates changed files
+  4. After scan: removes stale DB records, upserts changed ones
+  5. Returns { success, pagesUpdated, pagesRemoved, totalPages }
+
+seedSinglePage(rootDir, projectId, filePath):
+  Targeted re-seed for a single file after generate/implement
+
+parsePromptFile(content):
+  Parses .txt prompt files:
+  - Section headers: "SECTION 1: Name (Lines X-Y)"
+  - Within sections, recognises:
+      NLP_PROMPT:, DEV_PROMPT:, PROMPT:, TEMPLATE: — explicit markers
+      Numbered lists, ► > action items, table rows — auto-converted
+      ### headings, ALL-CAPS headings — auto-promoted
+  - Sets promptType: "NLP" or "DEVELOPER" accordingly
+
+FILE CLASSIFIER (backend/src/llm/classifier.js):
+  classifyByRules(filePath):
+    Deterministic — checks directory names, extensions, filename patterns
+    FRONTEND_DIRS: components/, pages/, app/, ui/, views/, layouts/, hooks/, etc.
+    DATABASE_DIRS: prisma/, migrations/, models/, db/, schema/, etc.
+    BACKEND_DIRS:  routes/, controllers/, services/, middleware/, api/, etc.
+
+  classifyWithLLM(files):
+    Asks LLM to classify batches of up to 50 files.
+    Falls back to classifyByRules on failure.
+
+
+--------------------------------------------------------------------------------
+8. AUTHENTICATION
+--------------------------------------------------------------------------------
+
+JWT-based auth (backend/src/middleware/auth.js):
+  generateToken(user)         — Signs JWT with JWT_SECRET, expires per JWT_EXPIRES_IN (24h default)
+  generateRefreshToken(user)  — 7-day expiry refresh token
+  authenticateToken           — Validates Bearer token from Authorization header
+  optionalAuth                — Passes through without requiring a token
+  requireRole(...roles)       — Role-based access gate
+
+First-run bootstrap (in auth.js):
+  If the users table is empty on first login, auto-creates two default accounts:
+    admin@hrassist.com / admin123  (role: admin)
+    user@hrassist.com  / user123   (role: user)
+
+Legacy password migration:
+  On successful login, upgrades any plain-text passwords to bcrypt in-place.
+
+
+--------------------------------------------------------------------------------
+9. KEY CONFIGURATION
+--------------------------------------------------------------------------------
+
+Root package.json:
+  "dev" script: concurrently runs backend (nodemon) + frontend (next dev -p 3000)
+  Dependencies: concurrently, diff
+
+backend/.env:
+  DATABASE_URL      = "file:./dev.db"
+  PORT              = 5000
+  JWT_SECRET        = hrassist-jwt-secret-key-2026-change-in-production
+  JWT_EXPIRES_IN    = 24h
+  LLM_PROVIDER      = infinitai
+  INFINITAI_API_KEY = sk-...
+  INFINITAI_BASE_URL= https://infinitai.sifymdp.digital/maas/v1
+  INFINITAI_MODEL   = meta-llama/Llama-3.2-11B-Vision-Instruct
+
+backend/package.json:
+  Main dependencies: @prisma/client, bcryptjs, compression, cors, dotenv,
+                     express, jsonwebtoken
+  DevDeps: nodemon, prisma
+  Scripts: dev (nodemon), prisma:generate, prisma:push, prisma:studio
+
+frontend/package.json:
+  Main dependencies: Next.js 15, React 19, Tailwind CSS, TypeScript
+
+
+--------------------------------------------------------------------------------
+10. SPECIAL FEATURES / NOTES
+--------------------------------------------------------------------------------
+
+  Theme persistence
+    ThemeProvider persists "light"/"dark" to localStorage key "theme".
+    Applies .dark class to <html> for Tailwind dark mode.
+
+  Dashboard mode persistence
+    DashboardModeContext persists "nlp"/"developer" to localStorage key "dashboardMode".
+
+  Windows folder picker
+    POST /api/projects/pick-folder invokes PowerShell script to open native
+    Windows Explorer folder selection dialog.
+
+  In-memory LLM session cache
+    pendingSessions Map in implement.js stores generated diffs until /apply is called.
+    Sessions expire after 30 minutes.
+
+  Template versioning
+    getLatestVersion(type) automatically picks the highest version of a template:
+    v3.txt beats v2.txt beats v1.txt (reverse alphabetical sort).
+    Adding a v3.txt to any template directory automatically activates it.
+
+  Debug logging
+    Every implement pipeline request writes full LLM inputs and outputs to
+    backend/logs/ with timestamps for diagnosis.
+
+  SEARCH/REPLACE matching fallback
+    applySearchReplacePatches() first tries exact string match,
+    then falls back to trimmed line-by-line comparison (whitespace-tolerant).
+    This allows the LLM's slightly misformatted SEARCH blocks to still apply.
+
+================================================================================
+END OF DETAIL
+================================================================================

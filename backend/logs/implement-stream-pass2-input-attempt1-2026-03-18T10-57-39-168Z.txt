@@ -1,0 +1,677 @@
+=== SYSTEM ===
+You are a Code Implementation Engine for targeted changes.
+
+Your task is to take the ORIGINAL source code, a CHANGE PLAN, and a CHANGE REQUEST, then output ONLY the specific code changes using SEARCH/REPLACE blocks.
+
+=================================================================================
+PAGE CONTEXT USAGE
+=================================================================================
+
+You will receive a PAGE CONTEXT block with SECTIONS and their RULES.
+For each section you modify:
+1. Read and strictly follow its RULES before writing code
+2. Never violate a section's RULES even if the change plan doesn't mention them
+3. Use existing functions and state — do not create duplicates
+
+=================================================================================
+CRITICAL RULES
+=================================================================================
+
+1. MINIMAL OUTPUT — Only output the code blocks that actually change. Do NOT output the entire file.
+2. EXACT SEARCH — The SEARCH block must match the original code EXACTLY (character for character).
+3. SMALL BLOCKS — Keep SEARCH/REPLACE blocks as small as possible. Only include enough surrounding context to uniquely identify the location.
+4. PRESERVE STYLE — Match the existing code's indentation, naming, and patterns exactly.
+5. ONE CHANGE PER BLOCK — Each SEARCH/REPLACE block should handle one logical change.
+
+=================================================================================
+OUTPUT FORMAT
+=================================================================================
+
+Output one or more SEARCH/REPLACE blocks:
+
+<<<SEARCH>>>
+exact original code to find (copy-paste from source, include 2-3 context lines)
+<<<REPLACE>>>
+the replacement code (same section with your changes applied)
+<<<END>>>
+
+For pure additions (no existing code to replace), use an empty SEARCH with nearby context:
+
+<<<SEARCH>>>
+the line AFTER which you want to insert new code
+<<<REPLACE>>>
+that same line (unchanged)
+your new code here
+<<<END>>>
+
+If new files are needed:
+
+<<<NEW_FILE: relative/path/to/file.js>>>
+complete content of the new file
+<<<END_FILE>>>
+
+=================================================================================
+IMPORTANT
+=================================================================================
+
+- Do NOT output explanations, comments about changes, or markdown
+- The SEARCH block must be EXACTLY as it appears in the source code
+- Include 2-3 unchanged lines around the change for context
+- Do NOT include the entire function or section — just the specific lines that change
+- The output must result in valid, compilable code when applied
+
+=================================================================================
+END OF IMPLEMENT-SECTION V2 TEMPLATE
+=================================================================================
+
+
+=== USER ===
+=== PAGE CONTEXT ===
+Component: page
+Purpose:   Prompt file for page.tsx
+
+=== SECTIONS ===
+
+SECTION: "DEVELOPER PROMPTS - Technical & Precise" (lines 78–313)
+  RULES: FRONTEND:
+         BACKEND:
+         DATABASE:
+
+Current source code file: frontend/src/app/chats/page.tsx
+
+--- SOURCE CODE ---
+"use client";
+
+import React, { useState, useRef, useEffect, useCallback } from "react";
+import { useTheme } from "@/components/ThemeProvider";
+import { ProfilePanel } from "@/components/ProfilePanel";
+import { getStoredUser, clearAuthData } from "@/lib/api";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+
+interface Message {
+    id: string;
+    role: "user" | "assistant" | "system";
+    content: string;
+    timestamp: Date;
+    isStreaming?: boolean;
+}
+
+interface ChatSession {
+    id: string;
+    title: string;
+    messages: Message[];
+    createdAt: Date;
+}
+
+function generateId() {
+    return Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+}
+
+export default function ChatsPage() {
+    const { theme } = useTheme();
+    const isDark = theme === "dark";
+
+    // State
+    const [sessions, setSessions] = useState<ChatSession[]>([]);
+    const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+    const [input, setInput] = useState("");
+    const [isLoading, setIsLoading] = useState(false);
+    const [sidebarOpen, setSidebarOpen] = useState(true);
+    const [user, setUser] = useState<any>(null);
+    const [showProfile, setShowProfile] = useState(false);
+
+    // Refs
+    const messagesEndRef = useRef<HTMLDivElement>(null);
+    const inputRef = useRef<HTMLTextAreaElement>(null);
+    const abortControllerRef = useRef<AbortController | null>(null);
+
+    // Active session
+    const activeSession = sessions.find((s) => s.id === activeSessionId) || null;
+
+    // Auto-scroll
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, [activeSession?.messages]);
+
+    // Auto-resize textarea
+    useEffect(() => {
+        if (inputRef.current) {
+            inputRef.current.style.height = "auto";
+            inputRef.current.style.height = Math.min(inputRef.current.scrollHeight, 200) + "px";
+        }
+    }, [input]);
+
+    // Create new session
+    const createNewSession = useCallback(() => {
+        const newSession: ChatSession = {
+            id: generateId(),
+            title: "New Chat",
+            messages: [],
+            createdAt: new Date(),
+        };
+        setSessions((prev) => [newSession, ...prev]);
+        setActiveSessionId(newSession.id);
+        setInput("");
+        inputRef.current?.focus();
+    }, []);
+
+    // Init with one session
+    useEffect(() => {
+        if (sessions.length === 0) {
+            createNewSession();
+        }
+        // Load user from localStorage
+        const storedUser = getStoredUser();
+        if (storedUser) setUser(storedUser);
+    }, []);
+
+    // Delete session
+    const deleteSession = (sessionId: string) => {
+        setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+        if (activeSessionId === sessionId) {
+            const remaining = sessions.filter((s) => s.id !== sessionId);
+            if (remaining.length > 0) {
+                setActiveSessionId(remaining[0].id);
+            } else {
+                createNewSession();
+            }
+        }
+    };
+
+    // Stop generation
+    const stopGeneration = () => {
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            abortControllerRef.current = null;
+        }
+        setIsLoading(false);
+        // Remove streaming flag from last message
+        setSessions((prev) =>
+            prev.map((s) =>
+                s.id === activeSessionId
+                    ? {
+                        ...s,
+                        messages: s.messages.map((m) => ({ ...m, isStreaming: false })),
+                    }
+                    : s
+            )
+        );
+    };
+
+    // Send message
+    const sendMessage = async () => {
+        if (!input.trim() || isLoading || !activeSessionId) return;
+
+        const userMessage: Message = {
+            id: generateId(),
+            role: "user",
+            content: input.trim(),
+            timestamp: new Date(),
+        };
+
+        const assistantMessage: Message = {
+            id: generateId(),
+            role: "assistant",
+            content: "",
+            timestamp: new Date(),
+            isStreaming: true,
+        };
+
+        // Update session with user message + empty assistant placeholder
+        setSessions((prev) =>
+            prev.map((s) => {
+                if (s.id !== activeSessionId) return s;
+                const updated = {
+                    ...s,
+                    messages: [...s.messages, userMessage, assistantMessage],
+                    title: s.messages.length === 0 ? input.trim().substring(0, 40) + (input.trim().length > 40 ? "..." : "") : s.title,
+                };
+                return updated;
+            })
+        );
+
+        setInput("");
+        setIsLoading(true);
+
+        // Build messages array for API
+        const currentSession = sessions.find((s) => s.id === activeSessionId);
+        const apiMessages = [
+            {
+                role: "system",
+                content:
+                    "You are a helpful, knowledgeable AI assistant. Provide clear, concise, and well-structured answers. Use markdown formatting when appropriate for code blocks, lists, and emphasis.",
+            },
+            ...(currentSession?.messages || []).map((m) => ({
+                role: m.role,
+                content: m.content,
+            })),
+            { role: "user", content: userMessage.content },
+        ];
+
+        const abortController = new AbortController();
+        abortControllerRef.current = abortController;
+
+        try {
+            const response = await fetch(`${API_URL}/api/chat`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ messages: apiMessages }),
+                signal: abortController.signal,
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const reader = response.body?.getReader();
+            if (!reader) throw new Error("No response stream");
+
+            const decoder = new TextDecoder();
+            let accumulated = "";
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const chunk = decoder.decode(value, { stream: true });
+                const lines = chunk.split("\n");
+
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed || trimmed === "data: [DONE]") continue;
+
+                    if (trimmed.startsWith("data: ")) {
+                        try {
+                            const data = JSON.parse(trimmed.slice(6));
+                            if (data.error) {
+                                accumulated += `\n\n⚠️ Error: ${data.error}`;
+                            } else if (data.content) {
+                                accumulated += data.content;
+                            }
+
+                            // Update the assistant message content
+                            setSessions((prev) =>
+                                prev.map((s) => {
+                                    if (s.id !== activeSessionId) return s;
+                                    const msgs = [...s.messages];
+                                    const lastMsg = msgs[msgs.length - 1];
+                                    if (lastMsg && lastMsg.id === assistantMessage.id) {
+                                        msgs[msgs.length - 1] = {
+                                            ...lastMsg,
+                                            content: accumulated,
+                                            isStreaming: true,
+                                        };
+                                    }
+                                    return { ...s, messages: msgs };
+                                })
+                            );
+                        } catch (e) {
+                            // skip malformed
+                        }
+                    }
+                }
+            }
+
+            // Mark streaming complete
+            setSessions((prev) =>
+                prev.map((s) => {
+                    if (s.id !== activeSessionId) return s;
+                    return {
+                        ...s,
+                        messages: s.messages.map((m) =>
+                            m.id === assistantMessage.id ? { ...m, isStreaming: false } : m
+                        ),
+                    };
+                })
+            );
+        } catch (error: any) {
+            if (error.name === "AbortError") {
+                // User cancelled
+                setSessions((prev) =>
+                    prev.map((s) => {
+                        if (s.id !== activeSessionId) return s;
+                        return {
+                            ...s,
+                            messages: s.messages.map((m) =>
+                                m.id === assistantMessage.id
+                                    ? { ...m, content: m.content || "⏹️ Generation stopped.", isStreaming: false }
+                                    : m
+                            ),
+                        };
+                    })
+                );
+            } else {
+                // Error
+                setSessions((prev) =>
+                    prev.map((s) => {
+                        if (s.id !== activeSessionId) return s;
+                        return {
+                            ...s,
+                            messages: s.messages.map((m) =>
+                                m.id === assistantMessage.id
+                                    ? { ...m, content: `❌ Error: ${error.message}. Please try again.`, isStreaming: false }
+                                    : m
+                            ),
+                        };
+                    })
+                );
+            }
+        } finally {
+            setIsLoading(false);
+            abortControllerRef.current = null;
+            inputRef.current?.focus();
+        }
+    };
+
+    // Handle Enter key
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    };
+
+    // Format message content (basic markdown)
+    const formatContent = (content: string) => {
+        if (!content) return "";
+        // Convert code blocks
+        let formatted = content.replace(
+            /```(\w*)\n([\s\S]*?)```/g,
+            '<pre class="chat-code-block"><code class="chat-code-lang-$1">$2</code></pre>'
+        );
+        // Inline code
+        formatted = formatted.replace(/`([^`]+)`/g, '<code class="chat-inline-code">$1</code>');
+        // Bold
+        formatted = formatted.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+        // Italic
+        formatted = formatted.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+        // Line breaks
+        formatted = formatted.replace(/\n/g, "<br/>");
+        return formatted;
+    };
+
+    // Copy message
+    const copyMessage = (content: string) => {
+        navigator.clipboard.writeText(content);
+    };
+
+    return (
+        <div className={`chat-page-layout ${isDark ? "dark" : ""}`}>
+            {/* ===== SIDEBAR ===== */}
+            <aside className={`chat-sidebar ${sidebarOpen ? "open" : "collapsed"}`}>
+                <div className="chat-sidebar-header">
+                    <button className="chat-sidebar-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="3" y1="12" x2="21" y2="12" />
+                            <line x1="3" y1="6" x2="21" y2="6" />
+                            <line x1="3" y1="18" x2="21" y2="18" />
+                        </svg>
+                    </button>
+                    {sidebarOpen && (
+                        <button className="chat-new-btn" onClick={createNewSession} id="new-chat-btn">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                <line x1="12" y1="5" x2="12" y2="19" />
+                                <line x1="5" y1="12" x2="19" y2="12" />
+                            </svg>
+                            <span>New Chat</span>
+                        </button>
+                    )}
+                </div>
+
+                {sidebarOpen && (
+                    <div className="chat-sidebar-sessions">
+                        <div className="chat-sidebar-label">Recent Chats</div>
+                        {sessions.map((session) => (
+                            <div
+                                key={session.id}
+                                className={`chat-session-item ${session.id === activeSessionId ? "active" : ""}`}
+                                onClick={() => setActiveSessionId(session.id)}
+                            >
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                                </svg>
+                                <span className="chat-session-title">{session.title}</span>
+                                <button
+                                    className="chat-session-delete"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        deleteSession(session.id);
+                                    }}
+                                    title="Delete chat"
+                                >
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M3 6h18" />
+                                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                                    </svg>
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
+                {sidebarOpen && (
+                    <div className="chat-sidebar-footer">
+                        <a href="/home" className="chat-sidebar-back">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M19 12H5" />
+                                <polyline points="12 19 5 12 12 5" />
+                            </svg>
+                            Back to Dashboard
+                        </a>
+                    </div>
+                )}
+            </aside>
+
+            {/* ===== MAIN CHAT AREA ===== */}
+            <main className="chat-main">
+                {/* Header */}
+                <header className="chat-header">
+                    {!sidebarOpen && (
+                        <button className="chat-sidebar-toggle-main" onClick={() => setSidebarOpen(true)}>
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <line x1="3" y1="12" x2="21" y2="12" />
+                                <line x1="3" y1="6" x2="21" y2="6" />
+                                <line x1="3" y1="18" x2="21" y2="18" />
+                            </svg>
+                        </button>
+                    )}
+                    <div className="chat-header-model">
+                        <div className="chat-model-indicator" />
+                        <span className="chat-model-name">InfinitAI</span>
+                        <span className="chat-model-label">Llama 3.2 11B Vision</span>
+                    </div>
+                    <div className="chat-header-actions">
+                        <button
+                            onClick={() => setShowProfile(true)}
+                            id="profile-btn"
+                            style={{
+                                width: 32, height: 32, borderRadius: 8,
+                                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                fontSize: 11, fontWeight: 700, color: '#fff',
+                                border: 'none', cursor: 'pointer',
+                                boxShadow: '0 2px 6px rgba(99, 102, 241, 0.3)',
+                                transition: 'all 0.2s ease', flexShrink: 0,
+                            }}
+                            title="Profile & Settings"
+                        >
+                            {user?.name?.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2) || '?'}
+                        </button>
+                    </div>
+                </header>
+
+                {/* Messages Area */}
+                <div className="chat-messages-container">
+                    {activeSession && activeSession.messages.length === 0 ? (
+                        <div className="chat-welcome">
+                            <div className="chat-welcome-icon">
+                                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+                                    <line x1="9" y1="9" x2="9.01" y2="9" />
+                                    <line x1="15" y1="9" x2="15.01" y2="9" />
+                                </svg>
+                            </div>
+                            <h1 className="chat-welcome-title">How can I help you today?</h1>
+                            <p className="chat-welcome-sub">
+                                Powered by <strong>InfinitAI MaaS</strong> — Llama 3.2 11B Vision
+                            </p>
+
+                            <div className="chat-suggestions">
+                                {[
+                                    { icon: "💡", text: "Explain a complex concept in simple terms" },
+                                    { icon: "🧑‍💻", text: "Help me write or debug code" },
+                                    { icon: "📝", text: "Draft an email or document for me" },
+                                    { icon: "🔍", text: "Analyze and summarize information" },
+                                ].map((suggestion, i) => (
+                                    <button
+                                        key={i}
+                                        className="chat-suggestion-card"
+                                        onClick={() => {
+                                            setInput(suggestion.text);
+                                            inputRef.current?.focus();
+                                        }}
+                                    >
+                                        <span className="chat-suggestion-icon">{suggestion.icon}</span>
+                                        <span className="chat-suggestion-text">{suggestion.text}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="chat-messages">
+                            {activeSession?.messages.map((message) => (
+                                <div key={message.id} className={`chat-message chat-message-${message.role}`}>
+                                    <div className="chat-message-avatar">
+                                        {message.role === "user" ? (
+                                            <div className="chat-avatar-user">
+                                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                                                    <circle cx="12" cy="7" r="4" />
+                                                </svg>
+                                            </div>
+                                        ) : (
+                                            <div className="chat-avatar-ai">
+                                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                    <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                                                    <path d="M2 17l10 5 10-5" />
+                                                    <path d="M2 12l10 5 10-5" />
+                                                </svg>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="chat-message-body">
+                                        <div className="chat-message-sender">
+                                            {message.role === "user" ? "You" : "InfinitAI"}
+                                        </div>
+                                        <div
+                                            className="chat-message-content"
+                                            dangerouslySetInnerHTML={{
+                                                __html: formatContent(message.content),
+                                            }}
+                                        />
+                                        {message.isStreaming && (
+                                            <span className="chat-cursor-blink">▊</span>
+                                        )}
+                                        {!message.isStreaming && message.role === "assistant" && message.content && (
+                                            <div className="chat-message-actions">
+                                                <button
+                                                    className="chat-action-btn"
+                                                    onClick={() => copyMessage(message.content)}
+                                                    title="Copy message"
+                                                >
+                                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                                                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                                                    </svg>
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                            <div ref={messagesEndRef} />
+                        </div>
+                    )}
+                </div>
+
+                {/* Input Area */}
+                <div className="chat-input-container">
+                    <div className="chat-input-wrapper">
+                        <textarea
+                            ref={inputRef}
+                            className="chat-input"
+                            value={input}
+                            onChange={(e) => setInput(e.target.value)}
+                            onKeyDown={handleKeyDown}
+                            placeholder="Message InfinitAI..."
+                            rows={1}
+                            disabled={isLoading}
+                            id="chat-input-field"
+                        />
+                        <div className="chat-input-actions">
+                            {isLoading ? (
+                                <button className="chat-stop-btn" onClick={stopGeneration} title="Stop generating" id="stop-generate-btn">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                        <rect x="6" y="6" width="12" height="12" rx="2" />
+                                    </svg>
+                                </button>
+                            ) : (
+                                <button
+                                    className={`chat-send-btn ${input.trim() ? "active" : ""}`}
+                                    onClick={sendMessage}
+                                    disabled={!input.trim()}
+                                    title="Send message"
+                                    id="send-message-btn"
+                                >
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <line x1="22" y1="2" x2="11" y2="13" />
+                                        <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                                    </svg>
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                    <p className="chat-disclaimer">
+                        InfinitAI can make mistakes. Check important info.
+                    </p>
+                </div>
+            </main>
+
+            {/* Profile Panel */}
+            {user && (
+                <ProfilePanel
+                    user={user}
+                    isOpen={showProfile}
+                    onClose={() => setShowProfile(false)}
+                    onLogout={() => { clearAuthData(); window.location.href = '/login'; }}
+                />
+            )}
+        </div>
+    );
+}
+
+--- END SOURCE CODE ---
+
+--- CHANGE PLAN ---
+[
+  {
+    "location": "Header section",
+    "action": "add",
+    "description": "Add a green button with the name 'Hello'"
+  },
+  {
+    "location": "Button click event handler",
+    "action": "modify",
+    "description": "Log 'You clicked green button' to the console when the button is clicked"
+  }
+]
+--- END CHANGE PLAN ---
+
+--- CHANGE REQUEST ---
+
+add a green button in the header the name of the button is hello and when click the yellow button use the console.log "you clicked green button"
+
+--- END CHANGE REQUEST ---

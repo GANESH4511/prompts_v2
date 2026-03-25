@@ -1,0 +1,15 @@
+```json
+{
+  "memory": "This is a prompt file for the page component in the frontend/src/app/chats/page.tsx file. The change request is to add a yellow button with the name 'hello' in the header section of the page.",
+  "affectedSections": ["NLP (USER-DEFINED) - Context & Behavior"],
+  "plan": [
+    {
+      "location": "Header section of the page",
+      "action": "add",
+      "description": "Add a yellow button with the name 'hello' in the header section of the page."
+    }
+  ],
+  "suggestedFiles": [],
+  "newFiles": []
+}
+```

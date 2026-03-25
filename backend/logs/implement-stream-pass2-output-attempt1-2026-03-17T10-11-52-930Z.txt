@@ -1,0 +1,5 @@
+<<<SEARCH>>>
+<span className="chat-model-name">InfinitAI</span>
+<<<REPLACE>>>
+<span className="chat-model-name" style={{ color: "yellow" }}>InfinitAI</span>
+<<<END>>>
