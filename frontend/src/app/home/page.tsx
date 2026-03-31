@@ -44,7 +44,7 @@ export default function HomePage() {
     const [newProjectDescription, setNewProjectDescription] = useState('');
     const [selectedPath, setSelectedPath] = useState('');
     const [browsing, setBrowsing] = useState(false);
-    const [currentBrowsePath, setCurrentBrowsePath] = useState('C:/');
+    const [currentBrowsePath, setCurrentBrowsePath] = useState('');
     const [directories, setDirectories] = useState<DirectoryItem[]>([]);
     const [browseLoading, setBrowseLoading] = useState(false);
     const [creating, setCreating] = useState(false);
@@ -120,7 +120,7 @@ export default function HomePage() {
     const browseDirectory = async (path: string, addToHistory: boolean = true) => {
         setBrowseLoading(true);
         try {
-            const result = await apiRequest(`/api/projects/browse?path=${encodeURIComponent(path)}`);
+            const result = await apiRequest(`/api/projects/browse?path=${encodeURIComponent(path)}${user ? `&userId=${user.id}` : ''}`);
 
             if (result.success && result.data?.success) {
                 // Add current path to history before navigating (if not going back)
@@ -161,7 +161,7 @@ export default function HomePage() {
         // Fallback: open in-browser file browser
         setBrowsing(true);
         setBrowseHistory([]);
-        browseDirectory(currentBrowsePath, false);
+        browseDirectory(currentBrowsePath || '', false);
     };
 
     const goBack = () => {
@@ -389,7 +389,7 @@ export default function HomePage() {
                                                 type="text"
                                                 value={selectedPath}
                                                 onChange={(e) => setSelectedPath(e.target.value)}
-                                                placeholder="C:/path/to/your/project"
+                                                placeholder="/path/to/your/project"
                                                 className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-white/5 border border-white/10 rounded-lg sm:rounded-xl text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all font-mono text-xs sm:text-sm"
                                             />
                                             <button

@@ -3,6 +3,7 @@ const router = express.Router();
 const { prisma } = require('../lib/prisma');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { seedProject } = require('./seed');
 
 // Get all projects for a user
@@ -325,8 +326,29 @@ router.post('/pick-folder', async (req, res) => {
 // Browse directory (for folder selection)
 router.get('/browse', async (req, res) => {
     try {
-        const { path: dirPath } = req.query;
-        const targetPath = dirPath || 'C:/';
+        const { path: dirPath, userId } = req.query;
+
+        let targetPath = dirPath;
+
+        // If no path provided, derive a smart default from the user's active project
+        if (!targetPath && userId) {
+            try {
+                const activeProject = await prisma.project.findFirst({
+                    where: { userId: String(userId), isActive: true }
+                });
+                if (activeProject && activeProject.path) {
+                    // Use the parent directory of the active project
+                    targetPath = path.dirname(activeProject.path.replace(/\//g, path.sep));
+                }
+            } catch (e) {
+                // Silently fall through to default
+            }
+        }
+
+        // Final fallback: user's home directory
+        if (!targetPath) {
+            targetPath = os.homedir();
+        }
 
         if (!fs.existsSync(targetPath)) {
             return res.status(400).json({

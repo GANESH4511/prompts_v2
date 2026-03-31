@@ -1,114 +1,154 @@
 # Agentic Prompt DB
 
-A split architecture application for managing code modification prompts.
+A split architecture application for managing and implementing code modification prompts using AI.
 
 ## Architecture
 
-This project is split into two parts:
-
 ```
-prompts/
-├── backend/     # Node.js + Express + Prisma API server
+prompts-v2/
+├── backend/          # Node.js + Express + Prisma + SQLite
 │   ├── src/
-│   │   ├── index.js         # Main Express server
-│   │   ├── lib/prisma.js    # Prisma client
-│   │   └── routes/          # API route handlers
-│   ├── prisma/schema.prisma # Database schema
-│   ├── package.json
-│   └── .env                 # Backend environment variables
+│   │   ├── index.js          # Main Express server
+│   │   ├── lib/              # Utilities (prisma, fileOps, etc.)
+│   │   ├── llm/              # LLM adapters (InfinitAI)
+│   │   ├── middleware/       # Auth middleware
+│   │   └── routes/           # API route handlers
+│   ├── prisma/schema.prisma  # Database schema
+│   ├── Dockerfile
+│   └── .env.example          # Environment variable template
 │
-└── frontend/    # Next.js UI application
-    ├── src/app/
-    │   ├── page.tsx         # Main UI component
-    │   ├── layout.tsx       # Root layout
-    │   └── globals.css      # Global styles
-    ├── package.json
-    └── .env.local           # Frontend environment variables
+├── frontend/         # Next.js UI application
+│   ├── src/
+│   │   ├── app/              # Pages (home, dashboard, chats, etc.)
+│   │   ├── components/       # Shared components
+│   │   ├── contexts/         # React contexts
+│   │   └── lib/              # API client
+│   └── Dockerfile
+│
+├── docker-compose.yml
+└── package.json              # Root scripts for both options
 ```
 
 ## Quick Start
 
-### 1. Setup Backend
+You have **two options** to run the project:
+
+---
+
+### Option 1: Local Development (`npm run dev`)
+
+Best for active development with hot-reload.
 
 ```bash
-cd backend
+# 1. Install all dependencies
+npm run install:all
 
-# Install dependencies
-npm install
+# 2. Set up environment
+cp backend/.env.example backend/.env
+# Edit backend/.env with your InfinitAI API key
 
-# Generate Prisma client
-npx prisma generate
+# 3. Generate Prisma client & create database
+cd backend && npx prisma generate && npx prisma db push && cd ..
 
-# Start the backend server (runs on port 5000)
+# 4. Start both servers (backend + frontend)
 npm run dev
 ```
 
-### 2. Setup Frontend
+---
+
+### Option 2: Docker (`docker compose up`)
+
+Best for quick setup, testing, or deployment on other machines.
 
 ```bash
-cd frontend
+# 1. Set up environment
+cp backend/.env.example backend/.env
+# Edit backend/.env with your InfinitAI API key
 
-# Install dependencies
-npm install
+# 2. Build and start containers
+npm run docker:up
 
-# Start the frontend dev server (runs on port 3000)
-npm run dev
+# View logs
+npm run docker:logs
+
+# Stop containers
+npm run docker:down
+
+# Rebuild from scratch (after code changes)
+npm run docker:build
 ```
 
-### 3. Access the Application
+---
+
+### Access the Application
 
 - **Frontend**: http://localhost:3000
 - **Backend API**: http://localhost:5000
 - **Health Check**: http://localhost:5000/api/health
 
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/pages` | Get all pages with sections and prompts |
-| GET | `/api/prompts` | Get prompts filtered by pageId/section |
-| POST | `/api/seed` | Scan project and seed database |
-| POST | `/api/save` | Save prompt file content |
-| GET | `/api/health` | Health check endpoint |
-
 ## Environment Variables
 
-### Backend (.env)
+### Backend (`backend/.env`)
 
 ```env
-DATABASE_URL="postgresql://..."
-PROJECT_ROOT=c:\SNIX\sify\HrAssist\exam
+DATABASE_URL="file:./dev.db"
 PORT=5000
+
+JWT_SECRET=change-this-to-a-secure-random-string
+JWT_EXPIRES_IN=24h
+
+LLM_PROVIDER=infinitai
+INFINITAI_API_KEY=your-api-key-here
+INFINITAI_BASE_URL=https://your-infinitai-endpoint/maas/v1
+INFINITAI_MODEL=meta/llama-3.3-70b-instruct
 ```
 
-### Frontend (.env.local)
+### Frontend (`frontend/.env.local` — optional)
 
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:5000
 ```
 
-## Running Both Servers
+## NPM Scripts
 
-You can run both servers in separate terminals:
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Start backend + frontend locally (hot-reload) |
+| `npm run install:all` | Install dependencies for both backend and frontend |
+| `npm run docker:up` | Build and start Docker containers |
+| `npm run docker:down` | Stop Docker containers |
+| `npm run docker:logs` | Stream logs from Docker containers |
+| `npm run docker:build` | Rebuild Docker images from scratch |
 
-**Terminal 1 (Backend):**
-```bash
-cd prompts/backend && npm run dev
-```
+## API Endpoints
 
-**Terminal 2 (Frontend):**
-```bash
-cd prompts/frontend && npm run dev
-```
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/api/auth/register` | No | Register a new user |
+| POST | `/api/auth/login` | No | Login and get JWT token |
+| POST | `/api/auth/verify` | Yes | Verify JWT token |
+| GET | `/api/pages` | Yes | Get all pages with sections and prompts |
+| GET | `/api/prompts` | Yes | Get prompts filtered by pageId/section |
+| POST | `/api/seed` | No | Scan project and seed database |
+| POST | `/api/save` | Yes | Save prompt file content |
+| GET | `/api/projects/user/:userId` | Yes | Get user's projects |
+| POST | `/api/projects` | Yes | Create a new project |
+| POST | `/api/implement/stream` | No | Generate code changes (SSE stream) |
+| POST | `/api/implement/apply` | No | Apply confirmed changes |
+| POST | `/api/implement/undo` | No | Rollback changes |
+| POST | `/api/chat` | No | Chat with InfinitAI |
+| GET | `/api/health` | No | Health check |
 
 ## Database
 
-The application uses PostgreSQL with Prisma ORM. The schema includes:
+Uses **SQLite** (via Prisma ORM) — zero installation required. The database file is auto-created at `backend/prisma/dev.db`.
 
-- **Page** - Code files being tracked
-- **Section** - Logical sections within a file
-- **Prompt** - Modification templates for each section
-- **MasterPrompt** - Top-level NLP instructions per file
-- **StateVar** - State variables in tracked files
-- **Function** - Functions in tracked files
-- **Dependency** - File dependencies
+### Models
+
+- **User** — Authentication and project ownership
+- **Project** — Multi-project support with filesystem paths
+- **Page** — Code files being tracked
+- **Section** — Logical sections within a file
+- **Prompt** — Modification templates (NLP and Developer types)
+- **ImplementHistory** — Change tracking and undo support
+- **ChangeRequest** — User change request history
