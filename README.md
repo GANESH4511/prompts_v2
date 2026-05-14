@@ -71,29 +71,7 @@ npm run dev
 
 ---
 
-### Option 2: Docker (`docker compose up`)
 
-Best for quick setup, testing, or deployment on other machines.
-
-```bash
-# 1. Set up environment
-cp backend/.env.example backend/.env
-# Edit backend/.env with your InfinitAI API key
-
-# 2. Build and start containers
-npm run docker:up
-
-# View logs
-npm run docker:logs
-
-# Stop containers
-npm run docker:down
-
-# Rebuild from scratch (after code changes)
-npm run docker:build
-```
-
----
 
 ### Access the Application
 
