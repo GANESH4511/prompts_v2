@@ -143,25 +143,38 @@ function parseSearchReplaceBlocks(raw) {
 
 /**
  * Apply an array of SEARCH/REPLACE patches to file content.
- * Each patch replaces the first exact occurrence of `search` with `replace`.
+ * Each patch replaces the first occurrence of `search` with `replace`.
+ *
+ * Enhanced matching chain:
+ *   1. Exact match
+ *   2. Whitespace-tolerant (trim each line)
+ *   3. Token-normalized (collapse all whitespace, compare tokens)
+ *   4. Fuzzy (≥80% of lines match)
+ *   5. Skip + log
  *
  * @param {string} fileContent - The current file content
  * @param {Array<{search: string, replace: string}>} patches
- * @returns {string} Modified file content
+ * @returns {{ content: string, applied: number, skipped: number, warnings: string[] }}
  */
 function applySearchReplacePatches(fileContent, patches) {
     let result = fileContent.replace(/\r\n/g, '\n');
+    let applied = 0;
+    let skipped = 0;
+    const warnings = [];
 
-    for (const patch of patches) {
+    for (let pIdx = 0; pIdx < patches.length; pIdx++) {
+        const patch = patches[pIdx];
         const normalizedSearch = patch.search.replace(/\r\n/g, '\n');
+        const normalizedReplace = patch.replace.replace(/\r\n/g, '\n');
 
-        // Exact match first
+        // ── 1. Exact match ──
         if (result.includes(normalizedSearch)) {
-            result = result.replace(normalizedSearch, patch.replace.replace(/\r\n/g, '\n'));
+            result = result.replace(normalizedSearch, normalizedReplace);
+            applied++;
             continue;
         }
 
-        // Fallback: trimmed whitespace-tolerant match
+        // ── 2. Whitespace-tolerant match (trim each line) ──
         const searchLines = normalizedSearch.split('\n');
         const resultLines = result.split('\n');
         let found = false;
@@ -175,20 +188,74 @@ function applySearchReplacePatches(fileContent, patches) {
                 }
             }
             if (match) {
-                const replaceLines = patch.replace.replace(/\r\n/g, '\n').split('\n');
+                const replaceLines = normalizedReplace.split('\n');
                 resultLines.splice(i, searchLines.length, ...replaceLines);
                 result = resultLines.join('\n');
                 found = true;
+                applied++;
+                warnings.push(`Patch ${pIdx + 1}: applied via whitespace-tolerant match`);
                 break;
             }
         }
+        if (found) continue;
 
-        if (!found) {
-            console.warn(`  ⚠️ SEARCH block not found in file, skipping patch`);
+        // ── 3. Token-normalized match ──
+        // Collapse all whitespace to single spaces and compare
+        const tokenize = (s) => s.replace(/\s+/g, ' ').trim();
+        const searchTokenized = tokenize(normalizedSearch);
+        const resultLinesForToken = result.split('\n');
+
+        for (let i = 0; i <= resultLinesForToken.length - searchLines.length; i++) {
+            const candidateBlock = resultLinesForToken.slice(i, i + searchLines.length).join('\n');
+            if (tokenize(candidateBlock) === searchTokenized) {
+                const replaceLines = normalizedReplace.split('\n');
+                resultLinesForToken.splice(i, searchLines.length, ...replaceLines);
+                result = resultLinesForToken.join('\n');
+                found = true;
+                applied++;
+                warnings.push(`Patch ${pIdx + 1}: applied via token-normalized match`);
+                break;
+            }
         }
+        if (found) continue;
+
+        // ── 4. Fuzzy match (≥80% of lines match) ──
+        const FUZZY_THRESHOLD = 0.92;
+        let bestScore = 0;
+        let bestIndex = -1;
+
+        for (let i = 0; i <= resultLinesForToken.length - searchLines.length; i++) {
+            let matchCount = 0;
+            for (let j = 0; j < searchLines.length; j++) {
+                if (resultLinesForToken[i + j].trim() === searchLines[j].trim()) {
+                    matchCount++;
+                }
+            }
+            const score = matchCount / searchLines.length;
+            if (score > bestScore) {
+                bestScore = score;
+                bestIndex = i;
+            }
+        }
+
+        if (bestScore >= FUZZY_THRESHOLD && bestIndex >= 0) {
+            const replaceLines = normalizedReplace.split('\n');
+            const currentResultLines = result.split('\n');
+            currentResultLines.splice(bestIndex, searchLines.length, ...replaceLines);
+            result = currentResultLines.join('\n');
+            applied++;
+            warnings.push(`Patch ${pIdx + 1}: applied via fuzzy match (${Math.round(bestScore * 100)}% similarity)`);
+            continue;
+        }
+
+        // ── 5. Skip — log details for debugging ──
+        const preview = searchLines.slice(0, 3).map(l => l.trim()).join(' | ');
+        console.warn(`  ⚠️ PATCH ${pIdx + 1} SKIPPED — SEARCH block not found (preview: "${preview.substring(0, 80)}")`);
+        warnings.push(`Patch ${pIdx + 1}: SKIPPED — no match found`);
+        skipped++;
     }
 
-    return result;
+    return { content: result, applied, skipped, warnings };
 }
 
 /**

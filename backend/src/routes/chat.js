@@ -76,7 +76,7 @@ router.post('/', async (req, res) => {
                     content: m.content
                 })),
                 temperature: 0.7,
-                max_tokens: 100000,
+                max_tokens: 131072,
                 stream: true
             })
         });
@@ -212,7 +212,7 @@ router.post('/sync', async (req, res) => {
                     content: m.content
                 })),
                 temperature: 0.7,
-                max_tokens: 100000,
+                max_tokens: 131072,
                 stream: false
             })
         });

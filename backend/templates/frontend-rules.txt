@@ -1,0 +1,165 @@
+=================================================================================
+FRONTEND EXCELLENCE RULES (Auto-injected for .tsx/.jsx/.css files)
+=================================================================================
+
+These rules are derived from 15 specialized frontend skills and MUST be followed
+when generating any frontend code changes.
+
+─── DESIGN SYSTEM ───────────────────────────────────────────────────────────────
+
+• Use semantic design tokens, NEVER hardcoded values:
+  ✅ bg-primary, text-muted-foreground, border-border
+  ❌ bg-blue-500, text-gray-400, border-gray-200
+
+• Define colors in OKLCH for perceptual uniformity:
+  --color-primary: oklch(0.7 0.15 250);
+
+• Typography: Use the project's font system. Never add arbitrary font sizes.
+  Use text-sm, text-base, text-lg — not text-[14px].
+
+• Spacing: Use the 4px grid (gap-1=4px, gap-2=8px, gap-4=16px).
+  Use gap-* for flex/grid spacing, NOT space-x-* or space-y-*.
+
+• Use size-* when width equals height: size-10 instead of w-10 h-10.
+
+─── MICRO-INTERACTIONS (from design-spells) ─────────────────────────────────────
+
+• Every interactive element MUST have a transition:
+  transition-colors duration-200, transition-transform duration-150
+
+• Hover states should feel alive:
+  hover:scale-[1.02], hover:brightness-110, hover:shadow-lg
+
+• Loading states use Skeleton components, never raw spinners unless inline.
+
+• Buttons: Add subtle press feedback:
+  active:scale-[0.98] active:brightness-95
+
+• Page transitions: Use opacity + translateY for section reveals:
+  animate-in fade-in slide-in-from-bottom-4 duration-500
+
+─── REACT 19 PATTERNS (from react-patterns) ─────────────────────────────────────
+
+• Server Components are DEFAULT. Only add 'use client' when needed for:
+  - useState, useEffect, useCallback, useMemo, useRef
+  - Event handlers (onClick, onChange, onSubmit)
+  - Browser APIs (window, document, localStorage)
+
+• Use React 19 hooks when available:
+  - useActionState for form submissions (replaces useFormState)
+  - useOptimistic for optimistic UI updates
+  - use() for reading promises and context
+
+• Component composition:
+  - One responsibility per component
+  - Props down, events up
+  - Use ReactNode for children type, never JSX.Element
+  - Prefer composition over inheritance
+
+• TypeScript: Define interfaces for all props. Use generics for reusable components.
+
+─── NEXT.JS APP ROUTER (from nextjs-best-practices) ─────────────────────────────
+
+• File conventions:
+  - page.tsx = route handler (Server Component by default)
+  - layout.tsx = shared UI wrapper
+  - loading.tsx = Suspense fallback
+  - error.tsx = error boundary (must be 'use client')
+  - not-found.tsx = 404 page
+
+• Data fetching:
+  - Use async Server Components for data fetching
+  - Parallel fetch with Promise.all for independent data
+  - Use Suspense + streaming for progressive loading
+
+• Images: Always use next/image with:
+  - priority={true} for above-fold images
+  - loading="lazy" for below-fold
+  - width + height or fill + sizes props
+
+• Dynamic imports for heavy components:
+  const Chart = dynamic(() => import('./Chart'), { ssr: false })
+
+─── TAILWIND CSS v4 (from tailwind-patterns) ─────────────────────────────────────
+
+• Configuration is CSS-first with @theme blocks, not tailwind.config.js.
+
+• Use container queries for component-level responsive:
+  @container (min-width: 400px) { ... }
+
+• Dark mode via semantic tokens, NOT manual dark: overrides:
+  ✅ bg-background text-foreground (automatic dark mode)
+  ❌ bg-white dark:bg-gray-900 text-black dark:text-white
+
+• Responsive: Use mobile-first (sm:, md:, lg:) breakpoints.
+
+• Avoid arbitrary values [px] when a scale value exists.
+
+─── SHADCN/UI COMPONENTS (from shadcn) ──────────────────────────────────────────
+
+• Forms: Use FieldGroup + Field + FormControl pattern, not raw div + Label.
+
+• Conditional classes: Always use cn() helper:
+  className={cn("base-classes", condition && "conditional-class")}
+
+• Component rules:
+  - Items always inside their Group (SelectItem → SelectGroup)
+  - Dialog/Sheet/Drawer always need a Title (accessibility)
+  - Icons use data-icon attribute, no sizing classes
+  - Use Skeleton for loading states
+  - Use Badge for status indicators
+  - Use Tooltip for icon-only buttons
+
+─── SCROLL & ANIMATION (from scroll-experience) ─────────────────────────────────
+
+• For scroll-triggered reveals, prefer CSS native:
+  animation-timeline: view();
+  animation-range: entry 0% cover 40%;
+
+• Parallax layer speeds:
+  Background: 0.2x | Midground: 0.5x | Foreground: 1.0x
+
+• Anti-patterns to AVOID:
+  ❌ Scroll hijacking (users hate losing scroll control)
+  ❌ Animation overload (less is more)
+  ❌ Desktop-only experiences (mobile is majority)
+
+• Always respect: @media (prefers-reduced-motion: reduce) { animation: none; }
+
+─── WEB PERFORMANCE (from web-performance-optimization) ──────────────────────────
+
+• Core Web Vitals targets:
+  LCP < 2.5s | CLS < 0.1 | INP < 200ms
+
+• Reserve space for async content (prevent CLS):
+  Use aspect-ratio or explicit width/height on containers.
+
+• Lazy load below-fold content:
+  Use dynamic imports, Suspense boundaries, and loading="lazy".
+
+• Bundle optimization:
+  - No barrel exports (index.ts re-exports) for component libraries
+  - Import specific functions: import { cn } from '@/lib/utils' not import * as utils
+
+─── ACCESSIBILITY (WCAG 2.1 AA) ─────────────────────────────────────────────────
+
+• Color contrast: Minimum 4.5:1 for normal text, 3:1 for large text.
+
+• Interactive elements:
+  - cursor-pointer on all clickable elements
+  - Visible focus states: focus-visible:ring-2 focus-visible:ring-ring
+  - Touch targets minimum 44x44px (p-2.5 or min-h-11 min-w-11)
+
+• Semantic HTML:
+  - <button> for actions, <a> for navigation
+  - <nav>, <main>, <section>, <article> for structure
+  - <h1> only once per page, proper heading hierarchy
+
+• ARIA:
+  - aria-label on icon-only buttons
+  - aria-live="polite" for dynamic content updates
+  - role="status" for loading indicators
+
+=================================================================================
+END FRONTEND EXCELLENCE RULES
+=================================================================================

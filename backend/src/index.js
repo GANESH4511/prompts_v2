@@ -15,6 +15,8 @@ const codeRouter = require('./routes/code');
 const generateRouter = require('./routes/generate');
 const chatRouter = require('./routes/chat');
 const implementRouter = require('./routes/implement');
+const rufloRouter = require('./routes/ruflo');
+const { getRufloClient } = require('./lib/rufloClient');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -48,6 +50,7 @@ app.use('/api/seed', seedRouter); // Temporarily public for local database seedi
 app.use('/api/generate-prompts', generateRouter); // Temporarily public for local generation
 app.use('/api/chat', chatRouter); // Chat with InfinitAI
 app.use('/api/implement', implementRouter); // Implement prompt changes into code
+app.use('/api/ruflo', rufloRouter); // RuFlo MCP tools (200+ tools)
 
 // Health check - public
 app.get('/api/health', (req, res) => {
@@ -105,8 +108,21 @@ app.use((err, req, res, next) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
     console.log(`🚀 Backend server running on http://localhost:${PORT}`);
     console.log(`📁 Project root: ${process.env.PROJECT_ROOT || 'Not set'}`);
     console.log(`🔐 JWT authentication enabled`);
+
+    // Check RuFlo MCP server availability on startup
+    const ruflo = getRufloClient();
+    console.log(`🐝 RuFlo MCP: Checking ${ruflo.baseUrl}...`);
+    const rufloReady = await ruflo.waitForReady().catch(() => false);
+    if (rufloReady) {
+        console.log(`🐝 RuFlo MCP: ✅ Connected — 200+ tools available`);
+        const tools = await ruflo.listTools().catch(() => []);
+        console.log(`🐝 RuFlo MCP: ${Array.isArray(tools) ? tools.length : '?'} tools discovered`);
+    } else {
+        console.log(`🐝 RuFlo MCP: ⚠️ Not available — fallback pipeline will be used`);
+        console.log(`   To start: npx ruflo mcp start -t http -p 8100`);
+    }
 });

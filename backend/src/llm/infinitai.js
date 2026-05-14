@@ -14,6 +14,12 @@
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 3000;
 const DEFAULT_TIMEOUT_MS = 300000; // 5 min timeout — Pass 2 implement can output 25k+ chars
+const DEFAULT_MAX_TOKENS = 100000;
+
+function getMaxTokens() {
+    const configured = parseInt(process.env.INFINITAI_MAX_TOKENS || '', 10);
+    return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_MAX_TOKENS;
+}
 
 function getConfig() {
     const apiKey = process.env.INFINITAI_API_KEY;
@@ -38,28 +44,40 @@ function getConfig() {
  */
 async function callInfinitAI({ systemPrompt, userPrompt, config }) {
     const url = `${config.baseUrl}/chat/completions`;
+    const maxTokens = getMaxTokens();
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
 
     try {
-        const response = await fetch(url, {
+        const basePayload = {
+            model: config.model,
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userPrompt }
+            ],
+            temperature: 0.3
+        };
+
+        const request = async (includeMaxTokens) => fetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${config.apiKey}`
             },
             signal: controller.signal,
-            body: JSON.stringify({
-                model: config.model,
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    { role: 'user', content: userPrompt }
-                ],
-                temperature: 0.3,
-                max_tokens: 100000
-            })
+            body: JSON.stringify(includeMaxTokens
+                ? { ...basePayload, max_tokens: maxTokens }
+                : basePayload)
         });
+
+        let response = await request(true);
+
+        if (!response.ok && response.status === 400 && maxTokens > 0) {
+            const firstErrorBody = await response.text().catch(() => 'No error body');
+            console.warn(`  ⚠️ InfinitAI rejected max_tokens=${maxTokens}; retrying without max_tokens. Error: ${firstErrorBody.substring(0, 200)}`);
+            response = await request(false);
+        }
 
         if (!response.ok) {
             const errorBody = await response.text().catch(() => 'No error body');
@@ -159,29 +177,41 @@ async function generate({ template, sourceCode }) {
 async function generateStream({ template, sourceCode, onChunk }) {
     const config = getConfig();
     const url = `${config.baseUrl}/chat/completions`;
+    const maxTokens = getMaxTokens();
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
 
     try {
-        const response = await fetch(url, {
+        const basePayload = {
+            model: config.model,
+            messages: [
+                { role: 'system', content: template },
+                { role: 'user', content: sourceCode }
+            ],
+            temperature: 0.3,
+            stream: true
+        };
+
+        const request = async (includeMaxTokens) => fetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${config.apiKey}`
             },
             signal: controller.signal,
-            body: JSON.stringify({
-                model: config.model,
-                messages: [
-                    { role: 'system', content: template },
-                    { role: 'user', content: sourceCode }
-                ],
-                temperature: 0.3,
-                max_tokens: 100000,
-                stream: true
-            })
+            body: JSON.stringify(includeMaxTokens
+                ? { ...basePayload, max_tokens: maxTokens }
+                : basePayload)
         });
+
+        let response = await request(true);
+
+        if (!response.ok && response.status === 400 && maxTokens > 0) {
+            const firstErrorBody = await response.text().catch(() => 'No error body');
+            console.warn(`  ⚠️ InfinitAI stream rejected max_tokens=${maxTokens}; retrying without max_tokens. Error: ${firstErrorBody.substring(0, 200)}`);
+            response = await request(false);
+        }
 
         if (!response.ok) {
             const errorBody = await response.text().catch(() => 'No error body');

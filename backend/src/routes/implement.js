@@ -19,6 +19,24 @@ const { resolveProjectRoot } = require('../lib/resolveProject');
 const { seedProject } = require('./seed');
 const { fileExists, buildDiff, parseSearchReplaceBlocks, applySearchReplacePatches } = require('../lib/fileOps');
 const { buildPageContext } = require('../lib/contextBuilder');
+const { rufloLog, sendUserStatus } = require('../lib/rufloLogger');
+const { buildArchitectContext, buildSpecialistContext, compressPlan } = require('../lib/contextSlicer');
+const { mergeAgentPatches, buildMergedOutput } = require('../lib/patchMerger');
+const { validatePatch } = require('../lib/syntaxValidator');
+const { autoRepair } = require('../lib/syntaxAutoRepair');
+
+// Load frontend excellence rules — cached once
+const fsSync2 = require('fs');
+const FRONTEND_RULES_PATH = path.resolve(__dirname, '../../templates/frontend-rules.txt');
+let _frontendRules = null;
+function getFrontendRules() {
+    if (_frontendRules) return _frontendRules;
+    try { _frontendRules = fsSync2.readFileSync(FRONTEND_RULES_PATH, 'utf-8'); } catch { _frontendRules = ''; }
+    return _frontendRules;
+}
+function isFrontendFile(filePath) {
+    return /\.(tsx|jsx|css|scss)$/i.test(filePath || '');
+}
 
 const router = express.Router();
 const pendingSessions = new Map();
@@ -148,7 +166,8 @@ router.post('/', async (req, res) => {
             `--- SOURCE CODE ---\n${sourceCode}\n--- END SOURCE CODE ---\n\n` +
             `--- CHANGE PLAN ---\n${planSummary}\n--- END CHANGE PLAN ---\n\n` +
             `--- CHANGE REQUEST ---\n${promptContent}\n--- END CHANGE REQUEST ---` +
-            fileStructureContext;
+            fileStructureContext +
+            (isFrontendFile(page.filePath) ? `\n\n${getFrontendRules()}` : '');
 
         debugLog('pass2-input', `=== SYSTEM ===\n${secTemplate.content}\n\n=== USER ===\n${pass2Prompt}`);
 
@@ -164,8 +183,33 @@ router.post('/', async (req, res) => {
         const { patches, newFiles } = parseSearchReplaceBlocks(llmRaw);
         console.log(`  📦 Parsed ${patches.length} SEARCH/REPLACE patch(es)`);
 
-        if (patches.length > 0) {
-            const patchedContent = applySearchReplacePatches(sourceCode, patches);
+        // ── Validate & auto-repair patches before applying ──
+        const validatedPatches = [];
+        for (const patch of patches) {
+            const result = validatePatch(patch, sourceCode);
+            if (result.valid) {
+                validatedPatches.push(patch);
+            } else if (result.canAutoRepair) {
+                const repaired = autoRepair(patch.replace);
+                if (repaired.repaired) {
+                    console.log(`  🔧 Auto-repaired patch: ${repaired.fixes.join(', ')}`);
+                    validatedPatches.push({ ...patch, replace: repaired.code });
+                } else {
+                    console.warn(`  ❌ Skipping invalid patch: ${result.errors.join('; ')}`);
+                }
+            } else {
+                console.warn(`  ❌ Skipping invalid patch: ${result.errors.join('; ')}`);
+            }
+            if (result.warnings.length > 0) {
+                result.warnings.forEach(w => console.log(`  ⚠️ Validation: ${w}`));
+            }
+        }
+        console.log(`  ✅ ${validatedPatches.length}/${patches.length} patches passed validation`);
+
+        if (validatedPatches.length > 0) {
+            const patchResult = applySearchReplacePatches(sourceCode, validatedPatches);
+            const patchedContent = patchResult.content;
+            if (patchResult.warnings?.length) patchResult.warnings.forEach(w => console.log(`  ⚠️ ${w}`));
             if (patchedContent.trim() !== sourceCode.trim()) {
                 diffs.push({
                     filePath: page.filePath,
@@ -336,6 +380,210 @@ router.post('/undo', async (req, res) => {
 
 
 // ==========================================
+// Swarm Pipeline — architect → parallel specialists → merge
+// ==========================================
+async function runSwarmPipeline({ sendEvent, page, sourceCode, promptContent, nlpContext, fileStructureContext, rootDir }) {
+    const startTime = Date.now();
+    rufloLog('pipeline', 'PIPELINE START', { page: page.filePath, mode: 'swarm' });
+    sendUserStatus(sendEvent, 'architect_start');
+
+    try {
+        // ── Step 1: Architect — decompose the change request ──
+        rufloLog('architect', 'Spawning architect agent');
+
+        const architectVersion = getLatestVersion('ruflo-architect');
+        const architectTemplate = loadTemplate('ruflo-architect', architectVersion);
+
+        const architectContext = buildArchitectContext(
+            sourceCode, nlpContext, promptContent,
+            {
+                filePath: page.filePath,
+                componentName: page.componentName,
+                sections: page.sections,
+                stateVars: [],
+                functions: []
+            }
+        );
+
+        debugLog('swarm-architect-input', `=== SYSTEM ===\n${architectTemplate.content}\n\n=== USER ===\n${architectContext}`);
+
+        const architectRaw = await generatePrompt({
+            template: architectTemplate.content,
+            sourceCode: architectContext,
+            metadata: { templateType: 'ruflo-architect', templateVersion: architectVersion, filePath: page.filePath }
+        });
+
+        debugLog('swarm-architect-output', architectRaw);
+
+        const architectPlan = parseLLMResponse(architectRaw);
+        const plan = compressPlan(architectPlan);
+
+        rufloLog('architect', 'Plan ready', { tasks: plan.tasks.length, complexity: plan.complexity });
+        sendUserStatus(sendEvent, 'architect_done');
+
+        sendEvent('plan', {
+            memory: plan.memory,
+            plan: plan.tasks,
+            suggestedFiles: architectPlan.suggestedFiles || []
+        });
+
+        if (!plan.tasks || plan.tasks.length === 0) {
+            rufloLog('error', 'Architect produced empty plan');
+            return null;
+        }
+
+        // ── Step 2: Specialists — parallel execution ──
+        sendUserStatus(sendEvent, 'agents_spawning', plan.tasks.length);
+
+        const specialistVersion = getLatestVersion('ruflo-specialist');
+        const specialistTemplate = loadTemplate('ruflo-specialist', specialistVersion);
+
+        const specialistPromises = plan.tasks.map((task, i) => {
+            const agentId = `specialist-${i}`;
+            const agentType = task.action || 'modify';
+
+            sendEvent('agent_spawn', {
+                agentId,
+                action: agentType,
+                description: task.description
+            });
+
+            rufloLog('spawn', `Spawning specialist ${agentId}`, { task: task.description?.substring(0, 60) });
+
+            // Resolve location to line numbers if architect only provided a string
+            if (task.location && (!task.startLine || !task.endLine)) {
+                const lines = sourceCode.split('\n');
+                const idx = lines.findIndex(l => l.includes(task.location));
+                if (idx >= 0) {
+                    task.startLine = idx + 1;
+                    task.endLine = Math.min(idx + 20, lines.length);
+                    rufloLog('context', `Resolved location "${task.location}" -> lines ${task.startLine}-${task.endLine}`);
+                }
+            }
+
+            const specialistContext = buildSpecialistContext(sourceCode, task, plan);
+
+            debugLog(`swarm-specialist-${i}-input`, `=== SYSTEM ===\n${specialistTemplate.content}\n\n=== USER ===\n${specialistContext}`);
+
+            return generatePrompt({
+                template: specialistTemplate.content,
+                sourceCode: specialistContext,
+                metadata: { templateType: 'ruflo-specialist', templateVersion: specialistVersion, filePath: task.file || page.filePath }
+            }).then(output => {
+                debugLog(`swarm-specialist-${i}-output`, output);
+                rufloLog('agent', `Specialist ${agentId} completed`, { outputLen: output.length });
+                sendEvent('agent_log', { agentId, status: 'done', message: `Completed: ${task.description}` });
+                return { agentId, output, file: task.file || page.filePath };
+            }).catch(err => {
+                rufloLog('error', `Specialist ${agentId} failed: ${err.message}`);
+                sendEvent('agent_log', { agentId, status: 'failed', message: `Failed: ${err.message}` });
+                return { agentId, output: '', file: task.file || page.filePath };
+            });
+        });
+
+        sendUserStatus(sendEvent, 'agents_running');
+        const agentOutputs = await Promise.all(specialistPromises);
+
+        const validOutputs = agentOutputs.filter(o => o.output.length > 0);
+        rufloLog('parallel', `${validOutputs.length}/${agentOutputs.length} specialists returned results`);
+
+        if (validOutputs.length === 0) {
+            rufloLog('error', 'All specialists returned empty results');
+            return null;
+        }
+
+        // ── Step 3: Merge patches ──
+        sendUserStatus(sendEvent, 'merge_start');
+
+        const { patches: mergedPatches, conflicts } = mergeAgentPatches(validOutputs, sourceCode, page.filePath);
+
+        if (conflicts.length > 0) {
+            rufloLog('error', `${conflicts.length} conflicts detected — using non-conflicting patches`);
+        }
+
+        const mergedOutput = buildMergedOutput(mergedPatches);
+        debugLog('swarm-merged-output', mergedOutput);
+
+        // ── Step 4: Parse, validate, and apply (same format as normal pipeline) ──
+        const { patches, newFiles } = parseSearchReplaceBlocks(mergedOutput);
+        rufloLog('merge', `Final: ${patches.length} patches, ${newFiles.length} new files`);
+
+        // ── Validate & auto-repair swarm patches ──
+        const validatedPatches = [];
+        for (const patch of patches) {
+            const result = validatePatch(patch, sourceCode);
+            if (result.valid) {
+                validatedPatches.push(patch);
+            } else if (result.canAutoRepair) {
+                const repaired = autoRepair(patch.replace);
+                if (repaired.repaired) {
+                    rufloLog('repair', `Auto-repaired patch: ${repaired.fixes.join(', ')}`);
+                    sendEvent('validation_warning', { message: `Auto-repaired: ${repaired.fixes.join(', ')}` });
+                    validatedPatches.push({ ...patch, replace: repaired.code });
+                } else {
+                    rufloLog('validation', `Skipping invalid patch: ${result.errors.join('; ')}`);
+                }
+            } else {
+                rufloLog('validation', `Skipping invalid patch: ${result.errors.join('; ')}`);
+            }
+        }
+        rufloLog('validation', `${validatedPatches.length}/${patches.length} patches passed validation`);
+
+        // ── Quality score — trigger fallback if too many patches are invalid ──
+        const qualityScore = patches.length > 0 ? validatedPatches.length / patches.length : 0;
+        rufloLog('quality', `Swarm quality score: ${(qualityScore * 100).toFixed(0)}%`);
+
+        if (qualityScore < 0.5 && patches.length > 0) {
+            rufloLog('fallback', `Quality score ${(qualityScore * 100).toFixed(0)}% < 50% threshold — triggering fallback`);
+            sendEvent('fallback_reason', { reason: 'quality_below_threshold', score: qualityScore, valid: validatedPatches.length, total: patches.length });
+            return null; // triggers fallback to 2-pass pipeline in the stream handler
+        }
+
+        const diffs = [];
+        if (validatedPatches.length > 0) {
+            const patchResult = applySearchReplacePatches(sourceCode, validatedPatches);
+            const patchedContent = patchResult.content;
+            if (patchResult.warnings?.length) patchResult.warnings.forEach(w => rufloLog('merge', w));
+            if (patchedContent.trim() !== sourceCode.trim()) {
+                const absolutePath = path.join(rootDir, page.filePath.split('/').join(path.sep));
+                diffs.push({
+                    filePath: page.filePath, absolutePath, action: 'modify',
+                    description: plan.memory || 'Modified via multi-agent pipeline',
+                    oldCode: sourceCode, newCode: patchedContent,
+                    diff: buildDiff(sourceCode, patchedContent), isNew: false
+                });
+            }
+        }
+
+        for (const nf of newFiles) {
+            const nfPath = path.isAbsolute(nf.filePath) ? nf.filePath : path.join(rootDir, nf.filePath.split('/').join(path.sep));
+            diffs.push({
+                filePath: nf.filePath, absolutePath: nfPath, action: 'create',
+                description: 'New file (multi-agent)', oldCode: '', newCode: nf.content,
+                diff: buildDiff('', nf.content), isNew: true
+            });
+        }
+
+        const elapsed = Date.now() - startTime;
+        sendUserStatus(sendEvent, 'merge_done');
+        rufloLog('done', 'Pipeline complete', { elapsed: `${elapsed}ms`, diffs: diffs.length, patches: patches.length });
+
+        return {
+            diffs,
+            memory: plan.memory || architectPlan.memory || '',
+            suggestedFiles: architectPlan.suggestedFiles || [],
+            elapsed
+        };
+
+    } catch (err) {
+        rufloLog('error', `Swarm pipeline failed: ${err.message}`);
+        sendUserStatus(sendEvent, 'fallback_normal');
+        return null;
+    }
+}
+
+
+// ==========================================
 // POST /api/implement/stream — SSE streaming (main route used by frontend)
 // ==========================================
 const MAX_RETRY_ATTEMPTS = 2;
@@ -344,7 +592,7 @@ router.post('/stream', async (req, res) => {
     const startTime = Date.now();
 
     try {
-        const { pageId, promptContent, scope, additionalFiles } = req.body;
+        const { pageId, promptContent, scope, additionalFiles, swarmMode } = req.body;
 
         if (!pageId || !promptContent?.trim()) {
             return res.status(400).json({ success: false, error: 'pageId and promptContent are required' });
@@ -396,7 +644,42 @@ router.post('/stream', async (req, res) => {
         const nlpContext = buildPageContext(page, 'nlp');
         const devContext = buildPageContext(page, 'developer');
 
-        // ── Auto-retry loop ──
+        // ── Swarm pipeline (when "always" or "ask" mode) ──
+        if (swarmMode === 'always' || swarmMode === 'ask') {
+            console.log(`  🐝 Swarm mode: ${swarmMode}`);
+            const swarmResult = await runSwarmPipeline({
+                sendEvent, page, sourceCode, promptContent, nlpContext, fileStructureContext, rootDir
+            });
+
+            if (swarmResult && swarmResult.diffs.length > 0) {
+                const sessionId = crypto.randomUUID();
+                pendingSessions.set(sessionId, {
+                    pageId, projectId: page.projectId, promptContent,
+                    scope: scope || 'single', diffs: swarmResult.diffs, rootDir, createdAt: Date.now()
+                });
+                const thirtyMinAgo = Date.now() - 30 * 60 * 1000;
+                for (const [sid, s] of pendingSessions.entries()) { if (s.createdAt < thirtyMinAgo) pendingSessions.delete(sid); }
+
+                sendEvent('result', {
+                    sessionId,
+                    memory: swarmResult.memory,
+                    diffs: swarmResult.diffs.map(d => ({
+                        filePath: d.filePath, action: d.action, description: d.description,
+                        oldCode: d.oldCode, newCode: d.newCode, diff: d.diff, isNew: d.isNew
+                    })),
+                    suggestedFiles: swarmResult.suggestedFiles,
+                    elapsed: `${swarmResult.elapsed}ms`
+                });
+                console.log(`  ✅ Swarm pipeline: ${swarmResult.elapsed}ms (${swarmResult.diffs.length} file(s))\n`);
+                return done();
+            }
+
+            // Swarm failed — fall through to normal 2-pass pipeline
+            sendEvent('status', { message: 'Falling back to standard pipeline...' });
+            console.log('  ⚠️ Swarm pipeline returned no results, falling back to 2-pass');
+        }
+
+        // ── Auto-retry loop (normal / fallback) ──
         let finalDiffs = [];
         let finalMemory = '';
         let finalSuggestedFiles = [];
@@ -454,7 +737,8 @@ router.post('/stream', async (req, res) => {
                     `--- SOURCE CODE ---\n${sourceCode}\n--- END SOURCE CODE ---\n\n` +
                     `--- CHANGE PLAN ---\n${planSummary}\n--- END CHANGE PLAN ---\n\n` +
                     `--- CHANGE REQUEST ---\n${promptContent}\n--- END CHANGE REQUEST ---` +
-                    fileStructureContext;
+                    fileStructureContext +
+                    (isFrontendFile(page.filePath) ? `\n\n${getFrontendRules()}` : '');
 
                 debugLog(`stream-pass2-input-attempt${attempt}`, `=== SYSTEM ===\n${secTemplate.content}\n\n=== USER ===\n${pass2Prompt}`);
 
@@ -471,7 +755,9 @@ router.post('/stream', async (req, res) => {
                 console.log(`  📦 Parsed ${patches.length} SEARCH/REPLACE patch(es)`);
 
                 if (patches.length > 0) {
-                    const patchedContent = applySearchReplacePatches(sourceCode, patches);
+                    const patchResult = applySearchReplacePatches(sourceCode, patches);
+                    const patchedContent = patchResult.content;
+                    if (patchResult.warnings?.length) patchResult.warnings.forEach(w => console.log(`  ⚠️ ${w}`));
                     if (patchedContent.trim() !== sourceCode.trim()) {
                         diffs.push({ filePath: page.filePath, absolutePath, action: 'modify', description: memory || 'Modified code', oldCode: sourceCode, newCode: patchedContent, diff: buildDiff(sourceCode, patchedContent), isNew: false });
                     }

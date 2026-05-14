@@ -3,9 +3,10 @@
     "version": "1.0.0",
     "private": true,
     "scripts": {
-        "dev": "concurrently -n backend,frontend -c blue,green \"npm run dev:backend\" \"npm run dev:frontend\"",
+        "dev": "concurrently -n backend,frontend,ruflo -c blue,green,magenta \"npm run dev:backend\" \"npm run dev:frontend\" \"npm run dev:ruflo\"",
         "dev:backend": "cd backend && npm run dev",
-        "dev:frontend": "cd frontend && npx next dev -p 3000",
+        "dev:frontend": "cd frontend && npm run dev -- -p 3000",
+        "dev:ruflo": "node backend/scripts/start-ruflo-http.mjs",
         "install:all": "cd backend && npm install && cd ../frontend && npm install",
         "docker:up": "docker compose up -d --build",
         "docker:down": "docker compose down",

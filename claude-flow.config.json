@@ -1,0 +1,31 @@
+{
+  "version": "3.0.0",
+  "providers": {
+    "default": "openai",
+    "openai": {
+      "model": "meta/llama-3.3-70b-instruct",
+      "maxTokens": 4096
+    }
+  },
+  "swarm": {
+    "topology": "centralized",
+    "maxAgents": 5,
+    "strategy": "specialized"
+  },
+  "memory": {
+    "type": "sqlite",
+    "path": "./backend/data/ruflo"
+  },
+  "mcp": {
+    "transport": "http",
+    "port": 8100,
+    "host": "localhost"
+  },
+  "security": {
+    "mode": "permissive"
+  },
+  "logging": {
+    "level": "info",
+    "destination": "console"
+  }
+}

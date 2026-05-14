@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { apiRequest, getAccessToken, clearAuthData } from '@/lib/api'
 import { ThemeToggle } from '@/components/ThemeToggle'
@@ -16,6 +17,14 @@ interface Prompt {
     description: string | null
     lineNumber: number
     promptType: 'NLP' | 'DEVELOPER'
+}
+
+interface SwarmAgent {
+    id: string
+    action: string
+    description: string
+    status: 'running' | 'completed' | 'failed'
+    logs: string[]
 }
 
 interface Section {
@@ -251,12 +260,80 @@ export default function PromptDetailPage() {
     const [streamingOutput, setStreamingOutput] = useState<string>('')
     const [isStreaming, setIsStreaming] = useState(false)
     const [retryAttempt, setRetryAttempt] = useState<number>(0)
+    const [swarmAgents, setSwarmAgents] = useState<SwarmAgent[]>([])
 
     // Change history states (sidebar)
     const [changeHistory, setChangeHistory] = useState<Array<{ id: string; changeText: string; changeType: string; status: string; createdAt: string; hasPlan: boolean }>>([])
 
     // Overflow menu state
     const [showOverflowMenu, setShowOverflowMenu] = useState(false)
+
+    // Swarm mode preference (localStorage-backed)
+    const [swarmMode, setSwarmMode] = useState<'ask' | 'always' | 'normal'>(() => {
+        if (typeof window !== 'undefined') {
+            return (localStorage.getItem('swarmMode') as 'ask' | 'always' | 'normal') || 'normal'
+        }
+        return 'normal'
+    })
+    const [showSwarmDropdown, setShowSwarmDropdown] = useState(false)
+    const [showSwarmFirstTime, setShowSwarmFirstTime] = useState(() => {
+        if (typeof window !== 'undefined') {
+            return !localStorage.getItem('swarmMode')
+        }
+        return true
+    })
+    const swarmGearRef = useRef<HTMLButtonElement>(null)
+    const [swarmDropdownPos, setSwarmDropdownPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 })
+
+    // AbortController for stopping implementation stream
+    const implementAbortRef = useRef<AbortController | null>(null)
+
+    const handleSwarmModeChange = (mode: 'ask' | 'always' | 'normal') => {
+        setSwarmMode(mode)
+        localStorage.setItem('swarmMode', mode)
+        setShowSwarmDropdown(false)
+        setShowSwarmFirstTime(false)
+    }
+
+    // Compute portal dropdown position from the gear button
+    const updateSwarmDropdownPos = useCallback(() => {
+        if (!swarmGearRef.current) return
+        const rect = swarmGearRef.current.getBoundingClientRect()
+        // Position above the button, aligned to left edge
+        setSwarmDropdownPos({
+            top: rect.top - 6, // 6px gap above the button
+            left: rect.left,
+        })
+    }, [])
+
+    // Close swarm dropdown on outside click, Escape key, scroll, and resize
+    useEffect(() => {
+        if (!showSwarmDropdown) return
+        updateSwarmDropdownPos()
+        const handleClick = (e: MouseEvent) => {
+            // Don't close if clicking inside the dropdown portal
+            const portal = document.getElementById('swarm-dropdown-portal')
+            if (portal && portal.contains(e.target as Node)) return
+            setShowSwarmDropdown(false)
+        }
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                setShowSwarmDropdown(false)
+                swarmGearRef.current?.focus()
+            }
+        }
+        const handleScrollOrResize = () => updateSwarmDropdownPos()
+        document.addEventListener('click', handleClick)
+        document.addEventListener('keydown', handleKeyDown)
+        window.addEventListener('scroll', handleScrollOrResize, true)
+        window.addEventListener('resize', handleScrollOrResize)
+        return () => {
+            document.removeEventListener('click', handleClick)
+            document.removeEventListener('keydown', handleKeyDown)
+            window.removeEventListener('scroll', handleScrollOrResize, true)
+            window.removeEventListener('resize', handleScrollOrResize)
+        }
+    }, [showSwarmDropdown, updateSwarmDropdownPos])
 
     useEffect(() => {
         const token = getAccessToken()
@@ -457,6 +534,7 @@ export default function PromptDetailPage() {
         setIsImplementing(true)
         setIsStreaming(true)
         setStreamingOutput('')
+        setSwarmAgents([])
         setRetryAttempt(0)
         setImplementStatus('Connecting to AI...')
         // Ensure panel is visible
@@ -471,14 +549,20 @@ export default function PromptDetailPage() {
                 return
             }
 
+            // Create abort controller for this stream
+            const abortController = new AbortController()
+            implementAbortRef.current = abortController
+
             const res = await fetch(`${API_URL}/api/implement/stream`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     pageId: page.id,
                     promptContent,
-                    scope: 'single'
-                })
+                    scope: 'single',
+                    swarmMode
+                }),
+                signal: abortController.signal
             })
 
             if (!res.ok) {
@@ -523,6 +607,24 @@ export default function PromptDetailPage() {
                                     setImplementStatus(json.message || `Retrying (${json.attempt}/${json.maxAttempts})...`)
                                     setStreamingOutput('')
                                     break
+                                case 'agent_spawn':
+                                    setSwarmAgents(prev => [...prev, {
+                                        id: json.agentId,
+                                        action: json.action,
+                                        description: json.description,
+                                        status: 'running',
+                                        logs: []
+                                    }])
+                                    break
+                                case 'agent_log':
+                                    setSwarmAgents(prev => prev.map(a => 
+                                        a.id === json.agentId ? {
+                                            ...a,
+                                            status: json.status || a.status,
+                                            logs: [...a.logs, json.message]
+                                        } : a
+                                    ))
+                                    break
                                 case 'plan':
                                     setImplementMemory(json.memory || '')
                                     setSuggestedFiles(json.suggestedFiles || [])
@@ -554,15 +656,29 @@ export default function PromptDetailPage() {
 
             // Refresh change history after implement
             fetchChangeHistory()
-        } catch (err) {
-            console.error('Implement error:', err)
-            setImplementStatus('Implementation failed: Network error')
-            setTimeout(() => setImplementStatus(''), 8000)
+        } catch (err: any) {
+            if (err?.name === 'AbortError') {
+                setImplementStatus('⏹️ Generation stopped by user')
+                setTimeout(() => setImplementStatus(''), 5000)
+            } else {
+                console.error('Implement error:', err)
+                setImplementStatus('Implementation failed: Network error')
+                setTimeout(() => setImplementStatus(''), 8000)
+            }
         } finally {
+            implementAbortRef.current = null
             setIsImplementing(false)
             setIsStreaming(false)
         }
-    }, [page, isImplementing, changesText])
+    }, [page, isImplementing, changesText, swarmMode])
+
+    // Stop implementation stream
+    const handleStopImplementation = useCallback(() => {
+        if (implementAbortRef.current) {
+            implementAbortRef.current.abort()
+            implementAbortRef.current = null
+        }
+    }, [])
 
     // Apply confirmed changes
     const handleApplyChanges = async () => {
@@ -1156,6 +1272,9 @@ export default function PromptDetailPage() {
                                 {retryAttempt > 0 && (
                                     <span className="implement-attempt-badge">Attempt {retryAttempt}/3</span>
                                 )}
+                                <span className="swarm-mode-indicator" title={`Mode: ${swarmMode}`}>
+                                    {swarmMode === 'always' ? '🤖' : swarmMode === 'ask' ? '🔄' : '📝'}
+                                </span>
                             </div>
                             <div className="implement-panel-controls">
                                 <button
@@ -1186,7 +1305,30 @@ export default function PromptDetailPage() {
                                 />
 
                                 {/* Streaming output */}
-                                {isStreaming && streamingOutput && (
+                                {swarmAgents.length > 0 && (
+                                    <div className="implement-panel-swarm-logs">
+                                        <div className="swarm-agents-header">
+                                            <span className="streaming-dot" />
+                                            Active Agents ({swarmAgents.length})
+                                        </div>
+                                        <div className="swarm-agents-list">
+                                            {swarmAgents.map((agent, i) => (
+                                                <div key={i} className={`swarm-agent-item ${agent.status}`}>
+                                                    <div className="swarm-agent-title">
+                                                        {agent.status === 'running' ? '⏳' : agent.status === 'completed' ? '✅' : '❌'} [{agent.id}] {agent.action}
+                                                    </div>
+                                                    <div className="swarm-agent-desc">{agent.description}</div>
+                                                    <div className="swarm-agent-logs">
+                                                        {agent.logs.map((log, li) => (
+                                                            <div key={li} className="swarm-agent-log-line">- {log}</div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                                {isStreaming && streamingOutput && swarmAgents.length === 0 && (
                                     <div className="implement-panel-stream">
                                         <div className="implement-panel-stream-header">
                                             <span className="streaming-dot" />
@@ -1197,17 +1339,93 @@ export default function PromptDetailPage() {
                                 )}
 
                                 <div className="implement-panel-footer">
-                                    <button
-                                        className="implement-panel-run-btn"
-                                        onClick={() => handleImplement(changesText.trim() ? changesText : undefined)}
-                                        disabled={isImplementing}
-                                    >
-                                        {isImplementing ? (
-                                            <><span className="generate-spinner" /> Running...</>
-                                        ) : (
-                                            <>🚀 Run</>
+                                    {/* Swarm mode gear icon */}
+                                    <div className="swarm-gear-container">
+                                        <button
+                                            ref={swarmGearRef}
+                                            className="swarm-gear-btn"
+                                            onClick={(e) => { e.stopPropagation(); setShowSwarmDropdown(!showSwarmDropdown); }}
+                                            title="Agent mode settings"
+                                            aria-haspopup="true"
+                                            aria-expanded={showSwarmDropdown}
+                                        >
+                                            ⚙️
+                                        </button>
+                                        {showSwarmDropdown && typeof document !== 'undefined' && createPortal(
+                                            <div
+                                                id="swarm-dropdown-portal"
+                                                className="swarm-dropdown-portal"
+                                                style={{
+                                                    position: 'fixed',
+                                                    top: 0,
+                                                    left: 0,
+                                                    width: '100vw',
+                                                    height: '100vh',
+                                                    zIndex: 99999,
+                                                    pointerEvents: 'none',
+                                                }}
+                                            >
+                                                <div
+                                                    className="swarm-dropdown"
+                                                    style={{
+                                                        position: 'absolute',
+                                                        top: swarmDropdownPos.top,
+                                                        left: swarmDropdownPos.left,
+                                                        transform: 'translateY(-100%)',
+                                                        pointerEvents: 'auto',
+                                                    }}
+                                                    onClick={e => e.stopPropagation()}
+                                                    role="menu"
+                                                    aria-label="Agent mode selection"
+                                                >
+                                                    <div className="swarm-dropdown-title">Agent Mode</div>
+                                                    <button
+                                                        className={`swarm-dropdown-option ${swarmMode === 'ask' ? 'active' : ''}`}
+                                                        onClick={() => handleSwarmModeChange('ask')}
+                                                        role="menuitem"
+                                                    >
+                                                        <span>🔄</span> Ask me every time
+                                                    </button>
+                                                    <button
+                                                        className={`swarm-dropdown-option ${swarmMode === 'always' ? 'active' : ''}`}
+                                                        onClick={() => handleSwarmModeChange('always')}
+                                                        role="menuitem"
+                                                    >
+                                                        <span>🤖</span> Always use agents
+                                                    </button>
+                                                    <button
+                                                        className={`swarm-dropdown-option ${swarmMode === 'normal' ? 'active' : ''}`}
+                                                        onClick={() => handleSwarmModeChange('normal')}
+                                                        role="menuitem"
+                                                    >
+                                                        <span>📝</span> Normal (no agents)
+                                                    </button>
+                                                    <div className="swarm-dropdown-hint">✓ Auto-saved</div>
+                                                </div>
+                                            </div>,
+                                            document.body
                                         )}
-                                    </button>
+                                    </div>
+
+                                    {isImplementing ? (
+                                        <button
+                                            className="implement-panel-stop-btn"
+                                            onClick={handleStopImplementation}
+                                            title="Stop generation"
+                                        >
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                                <rect x="6" y="6" width="12" height="12" rx="2" />
+                                            </svg>
+                                            Stop
+                                        </button>
+                                    ) : (
+                                        <button
+                                            className="implement-panel-run-btn"
+                                            onClick={() => handleImplement(changesText.trim() ? changesText : undefined)}
+                                        >
+                                            🚀 Run
+                                        </button>
+                                    )}
                                 </div>
                             </div>
                         )}
